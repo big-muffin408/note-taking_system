@@ -1,0 +1,21 @@
+{
+  "name": "ai-collaborative-note-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI enhanced collaborative Markdown note-taking system monorepo.",
+  "workspaces": [
+    "apps/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}
