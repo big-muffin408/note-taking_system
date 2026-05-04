@@ -4,18 +4,51 @@ import { useAuth } from '../contexts/AuthContext';
 import { ApiError } from '../lib/api';
 
 export default function RegisterPage() {
-  const { register } = useAuth();
+  const { register, requestVerificationCode } = useAuth();
   const navigate = useNavigate();
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+
+  React.useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setTimeout(() => setCooldown((value) => value - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [cooldown]);
+
+  async function handleSendCode() {
+    setError('');
+    setMessage('');
+
+    if (!email) {
+      setError('请先填写邮箱');
+      return;
+    }
+
+    setSendingCode(true);
+
+    try {
+      await requestVerificationCode(email);
+      setMessage('验证码已发送，请查看邮箱');
+      setCooldown(60);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '验证码发送失败，请稍后重试');
+    } finally {
+      setSendingCode(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+    setMessage('');
 
     if (password !== confirmPassword) {
       setError('两次输入的密码不一致');
@@ -27,10 +60,15 @@ export default function RegisterPage() {
       return;
     }
 
+    if (!verificationCode.trim()) {
+      setError('请输入邮箱验证码');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
-      await register(email, displayName, password);
+      await register(email, displayName, password, verificationCode);
       navigate('/', { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '注册失败，请稍后重试');
@@ -54,6 +92,7 @@ export default function RegisterPage() {
         </div>
 
         {error && <div className="auth-error">{error}</div>}
+        {message && <div className="auth-success">{message}</div>}
 
         <label className="field">
           <span>用户名</span>
@@ -78,6 +117,30 @@ export default function RegisterPage() {
             placeholder="your@email.com"
             required
           />
+        </label>
+
+        <label className="field">
+          <span>邮箱验证码</span>
+          <div className="verification-row">
+            <input
+              id="register-code"
+              type="text"
+              inputMode="numeric"
+              value={verificationCode}
+              onChange={(e) => setVerificationCode(e.target.value)}
+              placeholder="6 位验证码"
+              required
+              maxLength={6}
+            />
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={handleSendCode}
+              disabled={sendingCode || cooldown > 0}
+            >
+              {sendingCode ? '发送中…' : cooldown > 0 ? `${cooldown}s` : '发送验证码'}
+            </button>
+          </div>
         </label>
 
         <label className="field">

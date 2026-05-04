@@ -1,7 +1,8 @@
 import cors from 'cors';
 import express from 'express';
 import bcrypt from 'bcryptjs';
-import { randomBytes } from 'node:crypto';
+import nodemailer from 'nodemailer';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import pool, { ensureUserSchema } from './db.js';
 import { authMiddleware, signToken, type AuthRequest } from './middleware.js';
@@ -15,6 +16,14 @@ const serverPublicUrl = process.env.SERVER_PUBLIC_URL ?? appBaseUrl;
 const googleRedirectUri =
   process.env.GOOGLE_REDIRECT_URI ?? `${serverPublicUrl}/api/user/google/callback`;
 const googleStateCookie = 'notes_google_oauth_state';
+const verificationCodeTtlMinutes = Number(process.env.EMAIL_VERIFICATION_TTL_MINUTES ?? 10);
+const verificationSendCooldownSeconds = Number(process.env.EMAIL_VERIFICATION_COOLDOWN_SECONDS ?? 60);
+const smtpHost = process.env.SMTP_HOST;
+const smtpPort = Number(process.env.SMTP_PORT ?? 587);
+const smtpUser = process.env.SMTP_USER;
+const smtpPass = process.env.SMTP_PASS;
+const smtpSecure = process.env.SMTP_SECURE === 'true';
+const mailFrom = process.env.MAIL_FROM;
 
 interface GoogleUserInfo {
   sub: string;
@@ -50,6 +59,87 @@ function getConfiguredGoogleClient() {
   };
 }
 
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+function hashVerificationCode(email: string, code: string) {
+  return createHash('sha256')
+    .update(`${normalizeEmail(email)}:${code}:${process.env.JWT_SECRET ?? 'dev-jwt-secret-change-in-production'}`)
+    .digest('hex');
+}
+
+function hasMailConfig() {
+  return Boolean(smtpHost && mailFrom);
+}
+
+function createMailTransport() {
+  if (!hasMailConfig()) {
+    return undefined;
+  }
+
+  return nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined
+  });
+}
+
+async function sendVerificationEmail(email: string, code: string) {
+  const transport = createMailTransport();
+  if (!transport) {
+    throw new Error('SMTP is not configured');
+  }
+
+  await transport.sendMail({
+    from: mailFrom,
+    to: email,
+    subject: 'AI 协作笔记系统邮箱验证码',
+    text: `你的注册验证码是：${code}\n\n验证码 ${verificationCodeTtlMinutes} 分钟内有效。如果不是你本人操作，请忽略这封邮件。`,
+    html: `<p>你的注册验证码是：</p><p style="font-size:24px;font-weight:700;letter-spacing:4px;">${code}</p><p>验证码 ${verificationCodeTtlMinutes} 分钟内有效。如果不是你本人操作，请忽略这封邮件。</p>`
+  });
+}
+
+async function verifyEmailCode(email: string, code: string) {
+  const normalizedEmail = normalizeEmail(email);
+  const codeHash = hashVerificationCode(normalizedEmail, code.trim());
+
+  const [rows] = await pool.query(
+    `SELECT id, code_hash, attempts
+     FROM email_verification_codes
+     WHERE email = ?
+       AND consumed_at IS NULL
+       AND expires_at > CURRENT_TIMESTAMP
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [normalizedEmail]
+  );
+
+  const record = (rows as any[])[0];
+  if (!record) {
+    return { ok: false, reason: '验证码已过期，请重新获取' };
+  }
+
+  if (record.attempts >= 5) {
+    return { ok: false, reason: '验证码错误次数过多，请重新获取' };
+  }
+
+  if (record.code_hash !== codeHash) {
+    await pool.query(
+      'UPDATE email_verification_codes SET attempts = attempts + 1 WHERE id = ?',
+      [record.id]
+    );
+    return { ok: false, reason: '验证码错误' };
+  }
+
+  await pool.query(
+    'UPDATE email_verification_codes SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?',
+    [record.id]
+  );
+  return { ok: true };
+}
+
 function redirectToLoginError(res: express.Response, message: string) {
   const url = new URL('/login', appBaseUrl);
   url.searchParams.set('error', message);
@@ -69,12 +159,17 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.post('/register', async (req, res) => {
+app.post('/verification-code', async (req, res) => {
   try {
-    const { email, displayName, password } = req.body ?? {};
+    const rawEmail = typeof req.body?.email === 'string' ? req.body.email : '';
+    const email = normalizeEmail(rawEmail);
 
-    if (!email || !password || !displayName) {
-      return res.status(400).json({ error: '请填写所有必填字段（email, displayName, password）' });
+    if (!email) {
+      return res.status(400).json({ error: '请输入邮箱' });
+    }
+
+    if (!hasMailConfig()) {
+      return res.status(503).json({ error: '邮件服务尚未配置' });
     }
 
     const [existing] = await pool.query(
@@ -84,6 +179,60 @@ app.post('/register', async (req, res) => {
 
     if ((existing as any[]).length > 0) {
       return res.status(409).json({ error: '该邮箱已被注册' });
+    }
+
+    const [recentRows] = await pool.query(
+      `SELECT id
+       FROM email_verification_codes
+       WHERE email = ?
+         AND created_at > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ? SECOND)
+       LIMIT 1`,
+      [email, verificationSendCooldownSeconds]
+    );
+
+    if ((recentRows as any[]).length > 0) {
+      return res.status(429).json({ error: '验证码发送过于频繁，请稍后再试' });
+    }
+
+    const code = String(randomInt(100000, 1000000));
+    await pool.query(
+      `INSERT INTO email_verification_codes (id, email, code_hash, expires_at)
+       VALUES (?, ?, ?, DATE_ADD(CURRENT_TIMESTAMP, INTERVAL ? MINUTE))`,
+      [uuidv4(), email, hashVerificationCode(email, code), verificationCodeTtlMinutes]
+    );
+
+    await sendVerificationEmail(email, code);
+    res.json({ message: '验证码已发送' });
+  } catch (error) {
+    console.error('Send verification code error:', error);
+    if (error instanceof Error && error.message === 'SMTP is not configured') {
+      return res.status(503).json({ error: '邮件服务尚未配置' });
+    }
+    res.status(500).json({ error: '验证码发送失败，请稍后重试' });
+  }
+});
+
+app.post('/register', async (req, res) => {
+  try {
+    const { displayName, password, verificationCode } = req.body ?? {};
+    const email = normalizeEmail(typeof req.body?.email === 'string' ? req.body.email : '');
+
+    if (!email || !password || !displayName || !verificationCode) {
+      return res.status(400).json({ error: '请填写所有必填字段（email, displayName, password, verificationCode）' });
+    }
+
+    const [existing] = await pool.query(
+      'SELECT id FROM users WHERE email = ?',
+      [email]
+    );
+
+    if ((existing as any[]).length > 0) {
+      return res.status(409).json({ error: '该邮箱已被注册' });
+    }
+
+    const verification = await verifyEmailCode(email, String(verificationCode));
+    if (!verification.ok) {
+      return res.status(400).json({ error: verification.reason });
     }
 
     const id = uuidv4();

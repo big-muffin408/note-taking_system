@@ -13,7 +13,8 @@ interface AuthContextValue {
   token: string | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, displayName: string, password: string) => Promise<void>;
+  requestVerificationCode: (email: string) => Promise<void>;
+  register: (email: string, displayName: string, password: string, verificationCode: string) => Promise<void>;
   completeOAuthLogin: (token: string) => Promise<void>;
   logout: () => void;
 }
@@ -51,11 +52,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(data.user);
   }, []);
 
+  const requestVerificationCode = useCallback(async (email: string) => {
+    await api.post<{ message: string }>(
+      '/api/user/verification-code',
+      { email }
+    );
+  }, []);
+
   const register = useCallback(
-    async (email: string, displayName: string, password: string) => {
+    async (email: string, displayName: string, password: string, verificationCode: string) => {
       const data = await api.post<{ token: string; user: User }>(
         '/api/user/register',
-        { email, displayName, password }
+        { email, displayName, password, verificationCode }
       );
       localStorage.setItem(TOKEN_KEY, data.token);
       setToken(data.token);
@@ -78,7 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, completeOAuthLogin, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, requestVerificationCode, register, completeOAuthLogin, logout }}>
       {children}
     </AuthContext.Provider>
   );

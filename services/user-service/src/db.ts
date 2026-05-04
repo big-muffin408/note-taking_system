@@ -12,6 +12,20 @@ const pool = mysql.createPool({
 });
 
 export async function ensureUserSchema() {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS email_verification_codes (
+      id VARCHAR(36) PRIMARY KEY,
+      email VARCHAR(255) NOT NULL,
+      code_hash VARCHAR(64) NOT NULL,
+      expires_at TIMESTAMP NOT NULL,
+      consumed_at TIMESTAMP NULL,
+      attempts INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_email_verification_email_created (email, created_at),
+      INDEX idx_email_verification_expires (expires_at)
+    )`
+  );
+
   const [roleRows] = await pool.query(
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS

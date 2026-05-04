@@ -4,7 +4,7 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotes } from '../contexts/NotesContext';
-import { api } from '../lib/api';
+import { api, streamAI } from '../lib/api';
 import Editor from '../components/Editor';
 
 interface NoteDetail {
@@ -16,7 +16,7 @@ interface NoteDetail {
 }
 
 type CollabStatus = 'connecting' | 'connected' | 'disconnected' | 'synced';
-type AiMode = 'summary' | 'chat';
+type AiMode = 'summary' | 'chat' | 'polish';
 
 interface CollaborationSession {
   document: Y.Doc;
@@ -31,10 +31,6 @@ interface PdfUploadResponse {
   pages: number;
   status: string;
   markdownDraft: string;
-}
-
-interface AiSummaryResponse {
-  content: string;
 }
 
 interface AiChatResponse {
@@ -108,15 +104,26 @@ export default function EditorPage() {
   const [collabStatus, setCollabStatus] = useState<CollabStatus>('connecting');
   const [collaboratorCount, setCollaboratorCount] = useState(1);
   const [uploadingPdf, setUploadingPdf] = useState(false);
+
+  // AI state — streaming
   const [aiLoading, setAiLoading] = useState<AiMode | null>(null);
   const [aiQuestion, setAiQuestion] = useState('');
   const [aiResult, setAiResult] = useState('');
+  const [aiResultStreaming, setAiResultStreaming] = useState('');
   const [aiSources, setAiSources] = useState<AiChatResponse['sources']>([]);
   const [aiError, setAiError] = useState('');
+
+  // Polish state
+  const [selectedText, setSelectedText] = useState('');
+  const [polishResult, setPolishResult] = useState('');
+  const [polishStreaming, setPolishStreaming] = useState('');
+  const [showPolishModal, setShowPolishModal] = useState(false);
+
   const [insertRequest, setInsertRequest] = useState<{ id: number; html: string } | null>(null);
 
   const contentRef = useRef('');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const streamAbortRef = useRef<AbortController | null>(null);
 
   // Load note from server
   useEffect(() => {
@@ -247,53 +254,141 @@ export default function EditorPage() {
     }
   };
 
-  const runSummary = async () => {
-    if (!id || !token) return;
+  /** Cancel any ongoing SSE stream */
+  const cancelStream = () => {
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+      streamAbortRef.current = null;
+    }
+  };
 
+  const runSummary = async () => {
+    if (!id) return;
+    cancelStream();
     setAiLoading('summary');
     setAiError('');
+    setAiResult('');
+    setAiResultStreaming('');
     setAiSources([]);
-    try {
-      const result = await api.post<AiSummaryResponse>('/api/ai/summary', {
-        noteId: id,
-        documentId: note?.sourcePdfId,
-        text: contentRef.current,
-      }, token);
-      setAiResult(result.content);
-    } catch (err) {
-      console.error('Summary failed:', err);
-      setAiError(err instanceof Error ? err.message : '摘要生成失败');
-    } finally {
-      setAiLoading(null);
-    }
+
+    const abort = new AbortController();
+    streamAbortRef.current = abort;
+
+    await streamAI(
+      '/api/ai/summary',
+      { noteId: id, documentId: note?.sourcePdfId, text: contentRef.current },
+      {
+        onMeta: (meta) => setAiSources(meta.sources ?? []),
+        onChunk: (chunk) => setAiResultStreaming((prev) => prev + chunk),
+        onDone: (result) => {
+          setAiResult(result.content ?? '');
+          setAiResultStreaming('');
+          setAiLoading(null);
+        },
+        onError: (err) => {
+          if (err.name !== 'AbortError') {
+            setAiError(err.message || '摘要生成失败');
+          }
+          setAiLoading(null);
+        },
+      },
+      abort.signal,
+    );
   };
 
   const runChat = async () => {
-    if (!id || !token || !aiQuestion.trim()) return;
-
+    if (!id || !aiQuestion.trim()) return;
+    cancelStream();
     setAiLoading('chat');
     setAiError('');
-    try {
-      const result = await api.post<AiChatResponse>('/api/ai/chat', {
-        noteId: id,
-        documentId: note?.sourcePdfId,
-        question: aiQuestion.trim(),
-      }, token);
-      setAiResult(result.answer);
-      setAiSources(result.sources ?? []);
-    } catch (err) {
-      console.error('Chat failed:', err);
-      setAiError(err instanceof Error ? err.message : '问答失败');
-    } finally {
-      setAiLoading(null);
+    setAiResult('');
+    setAiResultStreaming('');
+    setAiSources([]);
+
+    const abort = new AbortController();
+    streamAbortRef.current = abort;
+
+    await streamAI(
+      '/api/ai/chat',
+      { noteId: id, documentId: note?.sourcePdfId, question: aiQuestion.trim() },
+      {
+        onMeta: (meta) => setAiSources(meta.sources ?? []),
+        onChunk: (chunk) => setAiResultStreaming((prev) => prev + chunk),
+        onDone: (result) => {
+          setAiResult(result.content ?? '');
+          setAiResultStreaming('');
+          setAiLoading(null);
+        },
+        onError: (err) => {
+          if (err.name !== 'AbortError') {
+            setAiError(err.message || '问答失败');
+          }
+          setAiLoading(null);
+        },
+      },
+      abort.signal,
+    );
+  };
+
+  const runPolish = async () => {
+    if (!selectedText.trim()) return;
+    cancelStream();
+    setAiLoading('polish');
+    setAiError('');
+    setPolishResult('');
+    setPolishStreaming('');
+    setShowPolishModal(true);
+
+    const abort = new AbortController();
+    streamAbortRef.current = abort;
+
+    await streamAI(
+      '/api/ai/polish',
+      { text: selectedText },
+      {
+        onChunk: (chunk) => setPolishStreaming((prev) => prev + chunk),
+        onDone: (result) => {
+          setPolishResult(result.content ?? '');
+          setPolishStreaming('');
+          setAiLoading(null);
+        },
+        onError: (err) => {
+          if (err.name !== 'AbortError') {
+            setAiError(err.message || '润色失败');
+          }
+          setAiLoading(null);
+          setShowPolishModal(false);
+        },
+      },
+      abort.signal,
+    );
+  };
+
+  const applyPolishResult = (replaceSelection: boolean) => {
+    const text = polishResult || polishStreaming;
+    if (!text.trim()) return;
+    if (replaceSelection) {
+      // Replace: wrap in a marker so EditorPage inserts as replacement
+      setInsertRequest({
+        id: Date.now(),
+        html: textToParagraphs(text),
+      });
+    } else {
+      setInsertRequest({
+        id: Date.now(),
+        html: `<h2>润色结果</h2>${textToParagraphs(text)}`,
+      });
     }
+    scheduleSave();
+    setShowPolishModal(false);
   };
 
   const insertAiResult = () => {
-    if (!aiResult.trim()) return;
+    const text = aiResult || aiResultStreaming;
+    if (!text.trim()) return;
     setInsertRequest({
       id: Date.now(),
-      html: `<h2>AI 结果</h2>${textToParagraphs(aiResult)}`
+      html: `<h2>AI 结果</h2>${textToParagraphs(text)}`
     });
     scheduleSave();
   };
@@ -312,12 +407,31 @@ export default function EditorPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [saveToServer]);
 
-  // Cleanup timer on unmount, trigger final save
+  // Cleanup timer on unmount, cancel any stream
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      cancelStream();
     };
   }, []);
+
+  // The floating polish toolbar shown when text is selected
+  const polishToolbar = selectedText ? (
+    <button
+      id="btn-polish-selection"
+      type="button"
+      className="btn-polish"
+      onClick={runPolish}
+      disabled={aiLoading !== null}
+      title="润色选中文字"
+    >
+      {aiLoading === 'polish' ? (
+        <span className="ai-spinner" />
+      ) : (
+        '✦ 润色'
+      )}
+    </button>
+  ) : null;
 
   if (loading) {
     return (
@@ -335,6 +449,9 @@ export default function EditorPage() {
     );
   }
 
+  const displayText = aiResultStreaming || aiResult;
+  const isStreaming = aiLoading === 'summary' || aiLoading === 'chat';
+
   return (
     <div className="editor-page">
       <header className="editor-header">
@@ -351,7 +468,7 @@ export default function EditorPage() {
           </span>
           {saving && <span className="status-saving">保存中…</span>}
           {!saving && lastSaved && (
-            <span className="status-saved">标题已保存 {lastSaved}</span>
+            <span className="status-saved">已保存 {lastSaved}</span>
           )}
           <button className="btn-save" onClick={saveToServer} disabled={saving}>
             {saving ? '保存中…' : '保存'}
@@ -376,7 +493,9 @@ export default function EditorPage() {
             onClick={runSummary}
             disabled={aiLoading !== null}
           >
-            {aiLoading === 'summary' ? '生成中…' : '生成摘要'}
+            {aiLoading === 'summary' ? (
+              <><span className="ai-spinner" /> 生成中</>
+            ) : '生成摘要'}
           </button>
         </div>
 
@@ -388,7 +507,7 @@ export default function EditorPage() {
             onKeyDown={(event) => {
               if (event.key === 'Enter') runChat();
             }}
-            placeholder="向当前笔记或 PDF 提问"
+            placeholder="向当前笔记或 PDF 提问…"
           />
           <button
             type="button"
@@ -396,17 +515,31 @@ export default function EditorPage() {
             onClick={runChat}
             disabled={aiLoading !== null || !aiQuestion.trim()}
           >
-            {aiLoading === 'chat' ? '检索中…' : '问答'}
+            {aiLoading === 'chat' ? (
+              <><span className="ai-spinner" /> 检索中</>
+            ) : '问答'}
           </button>
+          {(aiLoading === 'summary' || aiLoading === 'chat') && (
+            <button
+              type="button"
+              className="btn-secondary btn-stop"
+              onClick={cancelStream}
+              title="停止生成"
+            >
+              ■ 停止
+            </button>
+          )}
         </div>
 
-        {(aiResult || aiError) && (
+        {(displayText || aiError) && (
           <div className="ai-result-panel">
             {aiError ? (
               <p className="ai-error">{aiError}</p>
             ) : (
               <>
-                <p className="ai-result-text">{aiResult}</p>
+                <p className={`ai-result-text${isStreaming ? ' ai-result-streaming' : ''}`}>
+                  {displayText}
+                </p>
                 {aiSources.length > 0 && (
                   <div className="ai-sources">
                     {aiSources.slice(0, 3).map((source) => (
@@ -416,9 +549,11 @@ export default function EditorPage() {
                     ))}
                   </div>
                 )}
-                <button type="button" className="btn-link" onClick={insertAiResult}>
-                  插入笔记
-                </button>
+                {!isStreaming && (
+                  <button type="button" className="btn-link" onClick={insertAiResult}>
+                    插入笔记
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -429,6 +564,8 @@ export default function EditorPage() {
         content={note.content}
         onUpdate={handleContentUpdate}
         insertRequest={insertRequest}
+        onSelectionChange={setSelectedText}
+        floatingToolbar={polishToolbar}
         collaboration={
           collaboration
             ? {
@@ -441,6 +578,64 @@ export default function EditorPage() {
             : undefined
         }
       />
+
+      {/* Polish Modal */}
+      {showPolishModal && (
+        <div className="polish-modal-overlay" onClick={() => {
+          if (aiLoading !== 'polish') setShowPolishModal(false);
+        }}>
+          <div className="polish-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="polish-modal-header">
+              <h2>✦ AI 润色</h2>
+              <button
+                type="button"
+                className="polish-modal-close"
+                onClick={() => {
+                  cancelStream();
+                  setShowPolishModal(false);
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="polish-modal-body">
+              <div className="polish-panel">
+                <div className="polish-panel-label">原文</div>
+                <div className="polish-original">{selectedText}</div>
+              </div>
+              <div className="polish-divider">→</div>
+              <div className="polish-panel">
+                <div className="polish-panel-label">润色结果</div>
+                <div className={`polish-result${aiLoading === 'polish' ? ' ai-result-streaming' : ''}`}>
+                  {polishStreaming || polishResult || (
+                    aiLoading === 'polish' ? <span className="polish-thinking">润色中…</span> : null
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {(polishResult || polishStreaming) && aiLoading !== 'polish' && (
+              <div className="polish-modal-footer">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => applyPolishResult(false)}
+                >
+                  插入笔记
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setShowPolishModal(false)}
+                >
+                  关闭
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

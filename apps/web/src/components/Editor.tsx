@@ -23,6 +23,10 @@ interface EditorProps {
       color: string;
     };
   };
+  /** Called when the user selection changes. Passes the selected plain text (empty string when no selection). */
+  onSelectionChange?: (text: string) => void;
+  /** Extra controls rendered at the right end of the toolbar (e.g. polish button). */
+  floatingToolbar?: React.ReactNode;
 }
 
 function hasMeaningfulContent(content: string) {
@@ -30,7 +34,7 @@ function hasMeaningfulContent(content: string) {
   return compact.length > 0 || /<(h[1-6]|ul|ol|li|blockquote|pre|img|hr)\b/i.test(content);
 }
 
-export default function Editor({ content, onUpdate, editable = true, insertRequest, collaboration }: EditorProps) {
+export default function Editor({ content, onUpdate, editable = true, insertRequest, collaboration, onSelectionChange, floatingToolbar }: EditorProps) {
   const initialized = useRef(false);
   const lastInsertRequest = useRef<number | null>(null);
 
@@ -58,6 +62,12 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
     editable,
     onUpdate: ({ editor }) => {
       onUpdate(editor.getHTML());
+    },
+    onSelectionUpdate: ({ editor }) => {
+      if (!onSelectionChange) return;
+      const { from, to } = editor.state.selection;
+      const selectedText = from === to ? '' : editor.state.doc.textBetween(from, to, ' ');
+      onSelectionChange(selectedText);
     },
   }, [collaboration?.document, collaboration?.provider]);
 
@@ -231,6 +241,12 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
           </button>
         </div>
       </div>
+
+      {floatingToolbar && (
+        <div className="toolbar-floating-slot">
+          {floatingToolbar}
+        </div>
+      )}
 
       <EditorContent editor={editor} className="editor-content" />
     </div>

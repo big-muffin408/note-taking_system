@@ -1,18 +1,20 @@
 import hashlib
 import html
+import json
 import math
 import re
 import uuid
 from datetime import datetime, timezone
 from os import getenv
-from typing import Any, Optional
+from typing import Any, AsyncGenerator, Optional
 
 import fitz
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-app = FastAPI(title="AI Service", version="0.2.0")
+app = FastAPI(title="AI Service", version="0.3.0")
 
 VECTOR_SIZE = 128
 QDRANT_COLLECTION = getenv("QDRANT_COLLECTION", "note_chunks")
@@ -243,6 +245,67 @@ async def call_model(messages: list[dict[str, str]]) -> str:
     return response.json()["choices"][0]["message"]["content"]
 
 
+async def stream_model(messages: list[dict[str, str]]) -> AsyncGenerator[str, None]:
+    """Yield text chunks via SSE. For mock provider, simulate character-by-character output."""
+    provider = provider_name()
+    api_key = getenv("AI_API_KEY", "")
+    model = getenv("AI_MODEL", "deepseek-chat")
+
+    if provider == "mock" or not api_key:
+        content = messages[-1]["content"]
+        mock_reply = f"Mock AI response: {content[:200]}"
+        for char in mock_reply:
+            yield char
+        return
+
+    if provider == "deepseek":
+        base_url = (getenv("AI_BASE_URL") or "https://api.deepseek.com").rstrip("/")
+    elif provider == "openai":
+        base_url = (getenv("AI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported AI_PROVIDER: {provider}")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "POST",
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": model, "messages": messages, "temperature": 0.2, "stream": True},
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    delta = json.loads(data)["choices"][0]["delta"].get("content", "")
+                    if delta:
+                        yield delta
+                except (KeyError, json.JSONDecodeError):
+                    continue
+
+
+def make_sse_stream(
+    messages: list[dict[str, str]],
+    meta: dict[str, Any],
+) -> AsyncGenerator[str, None]:
+    """Wrap stream_model output as SSE event stream."""
+    async def generator() -> AsyncGenerator[str, None]:
+        # First event: metadata
+        yield f"event: meta\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
+        full_text = ""
+        async for chunk in stream_model(messages):
+            full_text += chunk
+            payload = json.dumps({"chunk": chunk}, ensure_ascii=False)
+            yield f"event: chunk\ndata: {payload}\n\n"
+        # Final event: done
+        done_payload = json.dumps({"content": full_text}, ensure_ascii=False)
+        yield f"event: done\ndata: {done_payload}\n\n"
+    return generator()
+
+
 @app.get("/health")
 def health():
     return {
@@ -312,7 +375,7 @@ async def index_document(payload: IndexRequest):
 
 
 @app.post("/summary")
-async def summarize(payload: TextRequest):
+async def summarize(payload: TextRequest, stream: bool = False):
     source_text = normalize_text(payload.text)
     sources: list[dict[str, Any]] = []
     if not source_text and (payload.document_id or payload.note_id):
@@ -322,11 +385,25 @@ async def summarize(payload: TextRequest):
     if not source_text:
         source_text = "这里将接入全文或选区摘要。"
 
-    content = await call_model([
+    messages = [
         {"role": "system", "content": "你是文献笔记助手，请用中文生成简洁摘要，保留关键论点。"},
         {"role": "user", "content": f"请总结以下内容：\n\n{source_text[:6000]}"},
-    ])
+    ]
 
+    if stream:
+        meta = {
+            "type": "summary",
+            "documentId": payload.document_id,
+            "noteId": payload.note_id,
+            "sources": sources,
+        }
+        return StreamingResponse(
+            make_sse_stream(messages, meta),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    content = await call_model(messages)
     return {
         "type": "summary",
         "documentId": payload.document_id,
@@ -338,12 +415,26 @@ async def summarize(payload: TextRequest):
 
 
 @app.post("/polish")
-async def polish(payload: TextRequest):
+async def polish(payload: TextRequest, stream: bool = False):
     source_text = payload.text or "这里将返回润色后的文本。"
-    content = await call_model([
-        {"role": "system", "content": "你是中文写作助手，请润色文本并保持原意。"},
+    messages = [
+        {"role": "system", "content": "你是中文写作助手，请润色文本：修正语法错误、优化表达，保持原意不变。直接返回润色后的文本，不加任何说明。"},
         {"role": "user", "content": source_text[:6000]},
-    ])
+    ]
+
+    if stream:
+        meta = {
+            "type": "polish",
+            "documentId": payload.document_id,
+            "noteId": payload.note_id,
+        }
+        return StreamingResponse(
+            make_sse_stream(messages, meta),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    content = await call_model(messages)
     return {
         "type": "polish",
         "documentId": payload.document_id,
@@ -353,16 +444,31 @@ async def polish(payload: TextRequest):
 
 
 @app.post("/chat")
-async def chat(payload: ChatRequest):
+async def chat(payload: ChatRequest, stream: bool = False):
     sources = await search_chunks(payload.question, payload.document_id, payload.note_id)
     context = "\n\n".join(
         f"[{index + 1}] {source['text']}" for index, source in enumerate(sources)
     )
-    answer = await call_model([
+    messages = [
         {"role": "system", "content": "你是 RAG 文档问答助手。请只根据给定上下文回答，不确定时说明缺少依据。"},
         {"role": "user", "content": f"问题：{payload.question}\n\n上下文：\n{context or '无可用上下文'}"},
-    ])
+    ]
 
+    if stream:
+        meta = {
+            "type": "rag-chat",
+            "documentId": payload.document_id,
+            "noteId": payload.note_id,
+            "question": payload.question,
+            "sources": sources,
+        }
+        return StreamingResponse(
+            make_sse_stream(messages, meta),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    answer = await call_model(messages)
     return {
         "type": "rag-chat",
         "documentId": payload.document_id,

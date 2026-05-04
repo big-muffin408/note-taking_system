@@ -148,7 +148,8 @@ docker compose up --build
 | 方法 | 路径 | 描述 | 认证 |
 |------|------|------|------|
 | GET | /health | 健康检查 | 否 |
-| POST | /register | 用户注册 | 否 |
+| POST | /verification-code | 发送注册邮箱验证码 | 否 |
+| POST | /register | 用户注册（需邮箱验证码） | 否 |
 | POST | /login | 用户登录 | 否 |
 | GET | /google | 发起 Google OAuth 登录 | 否 |
 | GET | /google/callback | Google OAuth 回调 | 否 |
@@ -210,5 +211,8 @@ npm audit --offline
 - `SERVER_PUBLIC_URL`：网关外部访问地址，用于生成 Google OAuth 回调地址
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`：Google OAuth 客户端配置
 - `GOOGLE_REDIRECT_URI`：Google OAuth 回调地址，默认 `http://localhost/api/user/google/callback`
+- `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `MAIL_FROM`：注册邮箱验证码的 SMTP 发信配置
+- `EMAIL_VERIFICATION_TTL_MINUTES`：验证码有效期，默认 10 分钟
+- `EMAIL_VERIFICATION_COOLDOWN_SECONDS`：同一邮箱发送间隔，默认 60 秒
 - `AI_PROVIDER`：AI 服务提供者（mock / openai / deepseek）
 - `AI_API_KEY`：AI API 密钥
