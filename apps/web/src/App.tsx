@@ -1,0 +1,104 @@
+import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { NotesProvider } from './contexts/NotesContext';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+import OAuthCallbackPage from './pages/OAuthCallbackPage';
+import EditorPage from './pages/EditorPage';
+import MainLayout from './components/MainLayout';
+
+function WelcomePage() {
+  return (
+    <div className="welcome-page">
+      <div className="welcome-content">
+        <svg width="48" height="48" viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" rx="8" fill="#4f46e5" />
+          <path d="M9 10h14M9 16h10M9 22h12" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
+        <h2>欢迎使用 AI 协作笔记系统</h2>
+        <p>在左侧选择一篇笔记开始编辑，或点击「新建笔记」创建一篇新的笔记。</p>
+      </div>
+    </div>
+  );
+}
+
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="auth-page">
+        <div className="auth-loading">加载中…</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function GuestOnly({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="auth-page">
+        <div className="auth-loading">加载中…</div>
+      </div>
+    );
+  }
+
+  if (user) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route
+            path="/auth/callback"
+            element={<OAuthCallbackPage />}
+          />
+          <Route
+            path="/login"
+            element={
+              <GuestOnly>
+                <LoginPage />
+              </GuestOnly>
+            }
+          />
+          <Route
+            path="/register"
+            element={
+              <GuestOnly>
+                <RegisterPage />
+              </GuestOnly>
+            }
+          />
+          <Route
+            element={
+              <RequireAuth>
+                <NotesProvider>
+                  <MainLayout />
+                </NotesProvider>
+              </RequireAuth>
+            }
+          >
+            <Route index element={<WelcomePage />} />
+            <Route path="note/:id" element={<EditorPage />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}

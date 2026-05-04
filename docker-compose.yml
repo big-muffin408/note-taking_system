@@ -31,6 +31,12 @@ services:
       context: ./services/user-service
     environment:
       PORT: 3001
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      SERVER_PUBLIC_URL: ${SERVER_PUBLIC_URL:-http://localhost}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost/api/user/google/callback}
       MYSQL_HOST: mysql
       MYSQL_DATABASE: ${MYSQL_DATABASE:-notes}
       MYSQL_USER: ${MYSQL_USER:-notes_user}
@@ -51,10 +57,15 @@ services:
       context: ./services/document-service
     environment:
       PORT: 3002
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
       MONGO_URL: mongodb://${MONGO_INITDB_ROOT_USERNAME:-notes_admin}:${MONGO_INITDB_ROOT_PASSWORD:-notes_password}@mongodb:27017
+      AI_SERVICE_URL: http://ai-service:3003
       QDRANT_URL: http://qdrant:6333
       MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
       MINIO_BUCKET: ${MINIO_BUCKET:-notes-assets}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     depends_on:
       - mongodb
       - qdrant
@@ -72,6 +83,7 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-deepseek-chat}
+      AI_BASE_URL: ${AI_BASE_URL:-}
       QDRANT_URL: http://qdrant:6333
     depends_on:
       - qdrant

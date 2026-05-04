@@ -11,6 +11,13 @@ const workspaces = [
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const children = new Set();
 let shuttingDown = false;
+const devEnv = {
+  ...process.env,
+  APP_BASE_URL: process.env.APP_BASE_URL ?? 'http://localhost:5173',
+  SERVER_PUBLIC_URL: process.env.SERVER_PUBLIC_URL ?? 'http://localhost:5173',
+  GOOGLE_REDIRECT_URI:
+    process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:5173/api/user/google/callback'
+};
 
 function stopAll(signal = 'SIGTERM') {
   if (shuttingDown) {
@@ -28,7 +35,7 @@ function stopAll(signal = 'SIGTERM') {
 for (const workspace of workspaces) {
   const child = spawn(npmCommand, ['run', 'dev', '--workspace', workspace], {
     stdio: 'inherit',
-    env: process.env
+    env: devEnv
   });
 
   children.add(child);
