@@ -3,9 +3,13 @@ import html
 import json
 import math
 import re
+import shutil
+import subprocess
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from os import getenv
+from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
 import fitz
@@ -14,11 +18,22 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+try:
+    import markdown as markdown_lib
+except ImportError:
+    markdown_lib = None
+
 app = FastAPI(title="AI Service", version="0.3.0")
 
 VECTOR_SIZE = 128
 QDRANT_COLLECTION = getenv("QDRANT_COLLECTION", "note_chunks")
 QDRANT_URL = getenv("QDRANT_URL", "http://localhost:6333").rstrip("/")
+PDF_PARSE_PROVIDER = getenv("PDF_PARSE_PROVIDER", "mineru").lower()
+PDF_PARSE_FALLBACK = getenv("PDF_PARSE_FALLBACK", "true").lower() == "true"
+MINERU_COMMAND = getenv("MINERU_COMMAND", "mineru")
+MINERU_BACKEND = getenv("MINERU_BACKEND", "pipeline")
+MINERU_LANGUAGE = getenv("MINERU_LANGUAGE", "").strip()
+MINERU_TIMEOUT_SECONDS = int(getenv("MINERU_TIMEOUT_SECONDS", "600"))
 
 
 class TextRequest(BaseModel):
@@ -70,6 +85,16 @@ def text_to_markdown(text: str, title: str) -> str:
 
 
 def markdown_to_html(markdown: str) -> str:
+    if markdown_lib:
+        try:
+            return markdown_lib.markdown(
+                markdown,
+                extensions=["extra", "sane_lists", "nl2br"],
+                output_format="html5",
+            )
+        except Exception:
+            pass
+
     blocks = []
     for block in re.split(r"\n\s*\n", markdown.strip()):
         escaped = html.escape(block.strip())
@@ -176,6 +201,127 @@ async def index_chunks(
         response.raise_for_status()
 
     return [{"index": i, "text": chunk} for i, chunk in enumerate(chunks)]
+
+
+def get_pdf_page_count(data: bytes) -> int:
+    try:
+        with fitz.open(stream=data, filetype="pdf") as document:
+            return document.page_count
+    except Exception:
+        return 0
+
+
+def parse_pdf_with_pymupdf(data: bytes, filename: str) -> dict[str, Any]:
+    try:
+        document = fitz.open(stream=data, filetype="pdf")
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="PDF 解析失败") from error
+
+    pages = [page.get_text("text") for page in document]
+    text = normalize_text("\n\n".join(pages))
+    markdown = text_to_markdown(text, filename)
+
+    return {
+        "parser": "pymupdf",
+        "pages": document.page_count,
+        "text": text,
+        "markdown": markdown,
+    }
+
+
+def choose_mineru_markdown(output_dir: Path) -> Path:
+    markdown_files = [
+        path for path in output_dir.rglob("*.md")
+        if path.is_file() and not path.name.startswith(".")
+    ]
+
+    if not markdown_files:
+        raise RuntimeError("MinerU did not produce a Markdown file.")
+
+    return max(markdown_files, key=lambda path: path.stat().st_size)
+
+
+def markdown_to_plain_text(markdown: str) -> str:
+    text = re.sub(r"!\[[^\]]*]\([^)]+\)", " ", markdown)
+    text = re.sub(r"\[([^\]]+)]\([^)]+\)", r"\1", text)
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.M)
+    text = re.sub(r"^\s{0,3}>\s?", "", text, flags=re.M)
+    text = re.sub(r"[*_~|]", " ", text)
+    return normalize_text(text)
+
+
+def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
+    if not shutil.which(MINERU_COMMAND):
+        raise RuntimeError(
+            f"MinerU command '{MINERU_COMMAND}' was not found. "
+            "Install mineru[all] or set MINERU_COMMAND."
+        )
+
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", filename or "document.pdf")
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name = f"{safe_name}.pdf"
+
+    with tempfile.TemporaryDirectory(prefix="mineru-parse-") as temp_root:
+        temp_path = Path(temp_root)
+        input_path = temp_path / safe_name
+        output_path = temp_path / "output"
+        input_path.write_bytes(data)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        command = [
+            MINERU_COMMAND,
+            "-p",
+            str(input_path),
+            "-o",
+            str(output_path),
+            "-b",
+            MINERU_BACKEND,
+        ]
+        if MINERU_LANGUAGE:
+            command.extend(["-l", MINERU_LANGUAGE])
+
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=MINERU_TIMEOUT_SECONDS,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"MinerU parse failed: {detail[:2000]}")
+
+        markdown_path = choose_mineru_markdown(output_path)
+        markdown = markdown_path.read_text(encoding="utf-8")
+        text = markdown_to_plain_text(markdown)
+
+    return {
+        "parser": "mineru",
+        "pages": get_pdf_page_count(data),
+        "text": text,
+        "markdown": markdown,
+    }
+
+
+def parse_pdf_document(data: bytes, filename: str) -> dict[str, Any]:
+    if PDF_PARSE_PROVIDER == "mineru":
+        try:
+            return parse_pdf_with_mineru(data, filename)
+        except Exception as error:
+            if not PDF_PARSE_FALLBACK:
+                raise
+            print(f"MinerU parse failed, falling back to PyMuPDF: {error}")
+            parsed = parse_pdf_with_pymupdf(data, filename)
+            parsed["parser"] = "pymupdf-fallback"
+            return parsed
+
+    if PDF_PARSE_PROVIDER == "pymupdf":
+        return parse_pdf_with_pymupdf(data, filename)
+
+    raise HTTPException(status_code=400, detail=f"Unsupported PDF_PARSE_PROVIDER: {PDF_PARSE_PROVIDER}")
 
 
 def qdrant_filter(document_id: Optional[str], note_id: Optional[str]) -> dict[str, Any] | None:
@@ -313,6 +459,9 @@ def health():
         "status": "ok",
         "provider": provider_name(),
         "model": getenv("AI_MODEL", "mock-model"),
+        "pdfParseProvider": PDF_PARSE_PROVIDER,
+        "pdfParseFallback": PDF_PARSE_FALLBACK,
+        "mineruBackend": MINERU_BACKEND,
         "qdrantCollection": QDRANT_COLLECTION,
         "timestamp": now_iso(),
     }
@@ -329,16 +478,16 @@ async def parse_pdf(
 
     data = await file.read()
     try:
-        document = fitz.open(stream=data, filetype="pdf")
+        parsed = parse_pdf_document(data, file.filename or "PDF 笔记")
+    except subprocess.TimeoutExpired as error:
+        raise HTTPException(status_code=504, detail="MinerU 解析超时") from error
+    except HTTPException:
+        raise
     except Exception as error:
-        raise HTTPException(status_code=400, detail="PDF 解析失败") from error
+        raise HTTPException(status_code=500, detail=str(error)) from error
 
-    pages = []
-    for page in document:
-        pages.append(page.get_text("text"))
-
-    text = normalize_text("\n\n".join(pages))
-    markdown = text_to_markdown(text, file.filename or "PDF 笔记")
+    text = parsed["text"]
+    markdown = parsed["markdown"]
     html_draft = markdown_to_html(markdown)
     chunks = await index_chunks(
         text,
@@ -352,9 +501,10 @@ async def parse_pdf(
         "documentId": document_id,
         "noteId": note_id,
         "fileName": file.filename,
-        "pages": document.page_count,
+        "parser": parsed["parser"],
+        "pages": parsed["pages"],
         "wordCount": len(re.findall(r"[\w\u4e00-\u9fff]+", text)),
-        "status": "parsed",
+        "status": f"parsed:{parsed['parser']}",
         "text": text,
         "markdownDraft": markdown,
         "htmlDraft": html_draft,

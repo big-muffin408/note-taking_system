@@ -17,12 +17,11 @@
 - ✅ 协同光标与在线人数状态
 - ✅ 协同服务健康检查（文档数、连接数）
 - ✅ 协同状态轻量持久化（MongoDB `document_updates`）
-- ✅ PDF 上传与轻量解析（PyMuPDF，原文件写入 MinIO）
+- ✅ PDF 上传与高质量解析（默认 MinerU，PyMuPDF fallback，原文件写入 MinIO）
 - ✅ PDF 解析后自动生成可编辑笔记
 - ✅ AI 摘要与 RAG 问答可演示链路（Qdrant 检索 + mock/deepseek/openai provider）
 
 ### 待开发
-- ⬜ 高精度 PDF 解析（MinerU/Marker）
 - ⬜ 离线编辑模式（IndexedDB + 同步）
 - ⬜ 复杂分享权限与协作者邀请
 
@@ -216,3 +215,6 @@ npm audit --offline
 - `EMAIL_VERIFICATION_COOLDOWN_SECONDS`：同一邮箱发送间隔，默认 60 秒
 - `AI_PROVIDER`：AI 服务提供者（mock / openai / deepseek）
 - `AI_API_KEY`：AI API 密钥
+- `PDF_PARSE_PROVIDER`：PDF 解析器，默认 `mineru`，也可设为 `pymupdf`
+- `PDF_PARSE_FALLBACK`：MinerU 失败时是否回退到 PyMuPDF，默认 `true`
+- `MINERU_BACKEND`：MinerU 后端，默认 `pipeline`，适合 CPU 环境

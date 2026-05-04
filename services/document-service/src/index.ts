@@ -30,6 +30,7 @@ interface PdfParseResponse {
   noteId: string;
   fileName: string;
   pages: number;
+  parser?: string;
   wordCount: number;
   status: string;
   text: string;
@@ -305,6 +306,7 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       bucket: minioBucket,
       bytes: file.size,
       pages: parsed.pages,
+      parser: parsed.parser,
       wordCount: parsed.wordCount,
       chunks: parsed.chunks,
       status: parsed.status,
@@ -318,6 +320,7 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       fileName,
       bytes: file.size,
       pages: parsed.pages,
+      parser: parsed.parser,
       status: parsed.status,
       markdownDraft: parsed.markdownDraft
     });
