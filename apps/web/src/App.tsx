@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import OAuthCallbackPage from './pages/OAuthCallbackPage';
 import EditorPage from './pages/EditorPage';
+import AdminPage from './pages/AdminPage';
 import MainLayout from './components/MainLayout';
 
 function WelcomePage() {
@@ -95,6 +96,7 @@ export default function App() {
           >
             <Route index element={<WelcomePage />} />
             <Route path="note/:id" element={<EditorPage />} />
+            <Route path="admin" element={<AdminPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

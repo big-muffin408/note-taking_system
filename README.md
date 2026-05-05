@@ -255,8 +255,10 @@ docker compose exec -T ai-service which mineru
 | 方法 | 路径 | 描述 | 认证 |
 |------|------|------|------|
 | GET | /health | 健康检查 | 否 |
-| GET | /pull | 拉取变更（占位） | 否 |
-| POST | /push | 推送变更（占位） | 否 |
+| GET | /pull | 拉取当前用户笔记，可带 `since` 增量游标 | 是 |
+| POST | /push | 推送离线队列中的 create / update / delete 变更 | 是 |
+
+`/api/sync/push` 使用 `baseUpdatedAt` 判断冲突：如果客户端基于的版本早于服务器当前版本，会返回 `conflict` 和 `serverNote`，前端会保留本地草稿并提示用户选择“保留本地草稿”或“使用服务器版本”。
 
 ### 协同服务
 
@@ -276,6 +278,14 @@ npm audit --offline
 
 当前构建已覆盖前端、用户服务、文档服务、协同服务和同步服务的 TypeScript 编译。
 
+## 离线编辑验收流程
+
+1. 正常启动服务并登录，在线创建一篇笔记，输入内容后刷新页面，确认内容仍在。
+2. 在浏览器 DevTools 中切到 Offline，新建笔记并编辑正文，侧边栏应显示“待同步”，编辑页应显示“离线编辑 / 待同步”。
+3. 恢复 Online，点击侧边栏“同步”或等待自动同步，本地 `local-*` 路由应自动跳转到服务端真实笔记 ID，状态变为“已同步”。
+4. 再次切到 Offline，编辑已有笔记或删除笔记；恢复 Online 后，修改或删除应同步到 MongoDB。
+5. 用两个窗口打开同一篇笔记，在窗口 A 保存后，窗口 B 基于旧版本保存应进入“有冲突”状态；分别验证“保留本地草稿”和“使用服务器版本”都能恢复到“已同步”。
+
 ## 环境变量
 
 参见 `.env.example`，关键变量：
@@ -288,8 +298,10 @@ npm audit --offline
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `MAIL_FROM`：注册邮箱验证码的 SMTP 发信配置
 - `EMAIL_VERIFICATION_TTL_MINUTES`：验证码有效期，默认 10 分钟
 - `EMAIL_VERIFICATION_COOLDOWN_SECONDS`：同一邮箱发送间隔，默认 60 秒
-- `AI_PROVIDER`：AI 服务提供者（mock / openai / deepseek）
+- `AI_PROVIDER`：AI 服务提供者（mock / openai / deepseek / xiaomi）
 - `AI_API_KEY`：AI API 密钥
+- `AI_MODEL`：模型名称；`xiaomi` 默认 `mimo-v2.5-pro`
+- `AI_BASE_URL`：自定义 OpenAI-compatible base URL；`xiaomi` 默认 `https://token-plan-cn.xiaomimimo.com/v1`
 - `PDF_PARSE_PROVIDER`：PDF 解析器，默认 `mineru`；也可设为 `pymupdf` 强制使用轻量文本解析。默认 `mineru` 在没有 `MINERU_API_URL` 且找不到 `MINERU_COMMAND` 时会回退到 PyMuPDF
 - `MINERU_BACKEND`：MinerU 后端，默认 `pipeline`，适合 CPU 环境
 - `MINERU_API_URL`：外部 MinerU FastAPI 地址；使用 `docker-compose.mineru.yml` 时会自动设为 `http://mineru-api:8000`

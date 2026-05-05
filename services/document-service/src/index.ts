@@ -9,6 +9,7 @@ import { authMiddleware, type AuthRequest } from './middleware.js';
 const app = express();
 const port = Number(process.env.PORT ?? 3002);
 const aiServiceUrl = process.env.AI_SERVICE_URL ?? 'http://localhost:3003';
+const userServiceUrl = process.env.USER_SERVICE_URL ?? 'http://localhost:3001';
 const minioBucket = process.env.MINIO_BUCKET ?? 'notes-assets';
 const minioClient = new MinioClient({
   endPoint: process.env.MINIO_ENDPOINT ?? 'localhost',
@@ -37,6 +38,35 @@ interface PdfParseResponse {
   markdownDraft: string;
   htmlDraft?: string;
   chunks: number;
+}
+
+async function auditLog(userId: string, action: string, targetId?: string, metadata?: Record<string, unknown>) {
+  try {
+    const db = await getDb();
+    await db.collection('audit_logs').insertOne({
+      userId,
+      action,
+      targetId,
+      targetType: 'document',
+      metadata,
+      createdAt: new Date(),
+    });
+  } catch {
+    // Silently ignore audit log failures
+  }
+}
+
+async function checkShareAccess(userId: string, documentId: string): Promise<'none' | 'read' | 'write'> {
+  try {
+    const res = await fetch(`${userServiceUrl}/internal/check-access?userId=${encodeURIComponent(userId)}&documentId=${encodeURIComponent(documentId)}`);
+    if (!res.ok) return 'none';
+    const data = await res.json() as { access: string };
+    if (data.access === 'write') return 'write';
+    if (data.access === 'read') return 'read';
+    return 'none';
+  } catch {
+    return 'none';
+  }
 }
 
 function stripPdfExtension(fileName: string) {
@@ -115,22 +145,54 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// Get notes list for authenticated user
+// Get notes list for authenticated user (own + shared)
 app.get('/notes', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const db = await getDb();
-    const notes = await db
+
+    // Get own notes
+    const ownNotes = await db
       .collection('documents')
       .find({ ownerId: req.userId })
       .sort({ updatedAt: -1 })
-      .project({ title: 1, updatedAt: 1, createdAt: 1, ownerId: 1 })
+      .project({ title: 1, content: 1, updatedAt: 1, createdAt: 1, ownerId: 1, sourcePdfId: 1 })
       .toArray();
 
+    // Get shared document IDs from user-service
+    let sharedNotes: any[] = [];
+    try {
+      const shareRes = await fetch(`${userServiceUrl}/shares/shared-with-me`, {
+        headers: { Authorization: req.headers.authorization ?? '' },
+      });
+      if (shareRes.ok) {
+        const shareData = await shareRes.json() as { items: Array<{ documentId: string; permission: string }> };
+        const sharedIds = shareData.items.map((s) => s.documentId).filter((id) => {
+          try { new ObjectId(id); return true; } catch { return false; }
+        });
+        if (sharedIds.length > 0) {
+          const objectIds = sharedIds.map((id) => new ObjectId(id));
+          sharedNotes = await db
+            .collection('documents')
+            .find({ _id: { $in: objectIds } })
+            .sort({ updatedAt: -1 })
+            .project({ title: 1, content: 1, updatedAt: 1, createdAt: 1, ownerId: 1, sourcePdfId: 1 })
+            .toArray();
+        }
+      }
+    } catch {
+      // If share check fails, just return own notes
+    }
+
+    const allNotes = [...ownNotes, ...sharedNotes];
+    allNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
     res.json({
-      items: notes.map((n) => ({
+      items: allNotes.map((n) => ({
         id: n._id.toHexString(),
         title: n.title,
         ownerId: n.ownerId,
+        content: n.content,
+        sourcePdfId: n.sourcePdfId,
         createdAt: n.createdAt,
         updatedAt: n.updatedAt
       }))
@@ -159,7 +221,10 @@ app.get('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     if (note.ownerId !== req.userId) {
-      return res.status(403).json({ error: '无权访问此笔记' });
+      const shareAccess = await checkShareAccess(req.userId!, req.params.id);
+      if (shareAccess === 'none') {
+        return res.status(403).json({ error: '无权访问此笔记' });
+      }
     }
 
     res.json({
@@ -167,7 +232,9 @@ app.get('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
       title: note.title,
       content: note.content,
       ownerId: note.ownerId,
+      sourcePdfId: note.sourcePdfId,
       createdAt: note.createdAt,
+      
       updatedAt: note.updatedAt
     });
   } catch (error) {
@@ -191,6 +258,8 @@ app.post('/notes', authMiddleware, async (req: AuthRequest, res) => {
     };
 
     const result = await db.collection('documents').insertOne(doc);
+
+    await auditLog(req.userId!, 'create_note', result.insertedId.toHexString());
 
     res.status(201).json({
       id: result.insertedId.toHexString(),
@@ -220,10 +289,31 @@ app.put('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     if (existing.ownerId !== req.userId) {
-      return res.status(403).json({ error: '无权修改此笔记' });
+      const shareAccess = await checkShareAccess(req.userId!, req.params.id);
+      if (shareAccess !== 'write') {
+        return res.status(403).json({ error: '无权修改此笔记' });
+      }
     }
 
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    const baseUpdatedAt = req.body?.baseUpdatedAt;
+    const baseDate = typeof baseUpdatedAt === 'string' ? new Date(baseUpdatedAt) : null;
+    if (baseDate && !Number.isNaN(baseDate.getTime()) && new Date(existing.updatedAt).toISOString() !== baseDate.toISOString()) {
+      return res.status(409).json({
+        error: '服务器版本已更新',
+        serverNote: {
+          id: existing._id.toHexString(),
+          title: existing.title,
+          content: existing.content,
+          ownerId: existing.ownerId,
+          sourcePdfId: existing.sourcePdfId,
+          createdAt: existing.createdAt,
+          updatedAt: existing.updatedAt,
+        },
+      });
+    }
+
+    const now = new Date();
+    const updates: Record<string, unknown> = { updatedAt: now };
     if (req.body?.title !== undefined) updates.title = req.body.title;
     if (req.body?.content !== undefined) updates.content = req.body.content;
 
@@ -232,9 +322,16 @@ app.put('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
       { $set: updates }
     );
 
+    await auditLog(req.userId!, 'update_note', req.params.id);
+
     res.json({
       id: req.params.id,
-      ...updates
+      title: updates.title ?? existing.title,
+      content: updates.content ?? existing.content,
+      ownerId: existing.ownerId,
+      sourcePdfId: existing.sourcePdfId,
+      createdAt: existing.createdAt,
+      updatedAt: now
     });
   } catch (error) {
     console.error('Update note error:', error);
@@ -264,6 +361,13 @@ app.delete('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     await db.collection('documents').deleteOne({ _id: objectId });
+
+    await auditLog(req.userId!, 'delete_note', req.params.id);
+
+    // Also clean up shares for this document
+    try {
+      await fetch(`${userServiceUrl}/internal/cleanup-shares?documentId=${req.params.id}`, { method: 'DELETE' }).catch(() => {});
+    } catch { /* ignore */ }
 
     res.json({ deleted: true, id: req.params.id });
   } catch (error) {
@@ -325,6 +429,8 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       updatedAt: now
     });
 
+    await auditLog(req.userId!, 'upload_pdf', noteId.toHexString(), { fileName, pages: parsed.pages });
+
     res.status(201).json({
       pdfId: pdfId.toHexString(),
       noteId: noteId.toHexString(),
@@ -339,6 +445,314 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
     console.error('PDF upload error:', error);
     const message = error instanceof Error ? error.message : 'PDF 上传解析失败';
     res.status(500).json({ error: message });
+  }
+});
+
+// --- Version History ---
+
+// Create a version snapshot
+app.post('/notes/:id/versions', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const db = await getDb();
+    let objectId: ObjectId;
+    try {
+      objectId = new ObjectId(req.params.id);
+    } catch {
+      return res.status(400).json({ error: '无效的笔记 ID' });
+    }
+
+    const note = await db.collection('documents').findOne({ _id: objectId });
+    if (!note) return res.status(404).json({ error: '笔记不存在' });
+    if (note.ownerId !== req.userId) return res.status(403).json({ error: '无权访问此笔记' });
+
+    const now = new Date();
+    const version = {
+      documentId: req.params.id,
+      title: note.title,
+      content: note.content,
+      modifierId: req.userId,
+      label: req.body?.label ?? null,
+      createdAt: now,
+    };
+
+    const result = await db.collection('versions').insertOne(version);
+
+    // Retention: keep only the latest 50 versions per document
+    const count = await db.collection('versions').countDocuments({ documentId: req.params.id });
+    if (count > 50) {
+      const old = await db
+        .collection('versions')
+        .find({ documentId: req.params.id })
+        .sort({ createdAt: 1 })
+        .limit(count - 50)
+        .toArray();
+      if (old.length > 0) {
+        await db.collection('versions').deleteMany({
+          _id: { $in: old.map((v) => v._id) },
+        });
+      }
+    }
+
+    res.status(201).json({
+      id: result.insertedId.toHexString(),
+      ...version,
+    });
+  } catch (error) {
+    console.error('Create version error:', error);
+    res.status(500).json({ error: '创建版本快照失败' });
+  }
+});
+
+// List versions for a note
+app.get('/notes/:id/versions', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const db = await getDb();
+    let objectId: ObjectId;
+    try {
+      objectId = new ObjectId(req.params.id);
+    } catch {
+      return res.status(400).json({ error: '无效的笔记 ID' });
+    }
+
+    const note = await db.collection('documents').findOne({ _id: objectId });
+    if (!note) return res.status(404).json({ error: '笔记不存在' });
+    if (note.ownerId !== req.userId) return res.status(403).json({ error: '无权访问此笔记' });
+
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const [versions, total] = await Promise.all([
+      db
+        .collection('versions')
+        .find({ documentId: req.params.id })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+      db.collection('versions').countDocuments({ documentId: req.params.id }),
+    ]);
+
+    res.json({
+      items: versions.map((v) => ({
+        id: v._id.toHexString(),
+        documentId: v.documentId,
+        title: v.title,
+        modifierId: v.modifierId,
+        label: v.label,
+        createdAt: v.createdAt,
+      })),
+      total,
+      page,
+      limit,
+    });
+  } catch (error) {
+    console.error('List versions error:', error);
+    res.status(500).json({ error: '获取版本列表失败' });
+  }
+});
+
+// Get a specific version
+app.get('/notes/:id/versions/:versionId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const db = await getDb();
+    let objectId: ObjectId;
+    try {
+      objectId = new ObjectId(req.params.id);
+    } catch {
+      return res.status(400).json({ error: '无效的笔记 ID' });
+    }
+
+    const note = await db.collection('documents').findOne({ _id: objectId });
+    if (!note) return res.status(404).json({ error: '笔记不存在' });
+    if (note.ownerId !== req.userId) return res.status(403).json({ error: '无权访问此笔记' });
+
+    let versionObjectId: ObjectId;
+    try {
+      versionObjectId = new ObjectId(req.params.versionId);
+    } catch {
+      return res.status(400).json({ error: '无效的版本 ID' });
+    }
+
+    const version = await db.collection('versions').findOne({
+      _id: versionObjectId,
+      documentId: req.params.id,
+    });
+
+    if (!version) return res.status(404).json({ error: '版本不存在' });
+
+    const hasYjsUpdate = Boolean(version.yjsUpdate);
+
+    res.json({
+      id: version._id.toHexString(),
+      documentId: version.documentId,
+      title: version.title,
+      content: version.content ?? '',
+      hasYjsUpdate,
+      modifierId: version.modifierId,
+      label: version.label,
+      createdAt: version.createdAt,
+    });
+  } catch (error) {
+    console.error('Get version error:', error);
+    res.status(500).json({ error: '获取版本失败' });
+  }
+});
+
+// Restore a version
+app.post('/notes/:id/versions/:versionId/restore', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const db = await getDb();
+    let objectId: ObjectId;
+    try {
+      objectId = new ObjectId(req.params.id);
+    } catch {
+      return res.status(400).json({ error: '无效的笔记 ID' });
+    }
+
+    const note = await db.collection('documents').findOne({ _id: objectId });
+    if (!note) return res.status(404).json({ error: '笔记不存在' });
+    if (note.ownerId !== req.userId) return res.status(403).json({ error: '无权修改此笔记' });
+
+    let versionObjectId: ObjectId;
+    try {
+      versionObjectId = new ObjectId(req.params.versionId);
+    } catch {
+      return res.status(400).json({ error: '无效的版本 ID' });
+    }
+
+    const version = await db.collection('versions').findOne({
+      _id: versionObjectId,
+      documentId: req.params.id,
+    });
+
+    if (!version) return res.status(404).json({ error: '版本不存在' });
+
+    const now = new Date();
+    const currentCollaborativeState = await db.collection('document_updates').findOne({
+      documentId: req.params.id,
+    });
+
+    // Save current state as a new version before restoring
+    await db.collection('versions').insertOne({
+      documentId: req.params.id,
+      title: note.title,
+      content: note.content,
+      yjsUpdate: currentCollaborativeState?.update,
+      modifierId: req.userId,
+      label: '恢复前自动快照',
+      createdAt: now,
+    });
+
+    if (version.yjsUpdate) {
+      await db.collection('document_updates').updateOne(
+        { documentId: req.params.id },
+        {
+          $set: {
+            documentId: req.params.id,
+            update: version.yjsUpdate,
+            restoredAt: now,
+            updatedAt: now,
+          },
+          $setOnInsert: {
+            createdAt: now,
+          },
+        },
+        { upsert: true },
+      );
+
+      await db.collection('documents').updateOne(
+        { _id: objectId },
+        {
+          $set: {
+            title: version.title,
+            updatedAt: now,
+          },
+        },
+      );
+
+      return res.json({
+        id: req.params.id,
+        title: version.title,
+        content: note.content,
+        ownerId: note.ownerId,
+        sourcePdfId: note.sourcePdfId,
+        createdAt: note.createdAt,
+        updatedAt: now,
+        restoredYjs: true,
+      });
+    }
+
+    await db.collection('document_updates').updateOne(
+      { documentId: req.params.id },
+      {
+        $set: {
+          documentId: req.params.id,
+          restoredAt: now,
+          updatedAt: now,
+        },
+        $unset: {
+          update: '',
+        },
+        $setOnInsert: {
+          createdAt: now,
+        },
+      },
+      { upsert: true },
+    );
+
+    await db.collection('documents').updateOne(
+      { _id: objectId },
+      {
+        $set: {
+          title: version.title,
+          content: version.content ?? '<p></p>',
+          updatedAt: now,
+        },
+      },
+    );
+
+    res.json({
+      id: req.params.id,
+      title: version.title,
+      content: version.content ?? '<p></p>',
+      ownerId: note.ownerId,
+      sourcePdfId: note.sourcePdfId,
+      createdAt: note.createdAt,
+      updatedAt: now,
+      restoredYjs: false,
+    });
+  } catch (error) {
+    console.error('Restore version error:', error);
+    res.status(500).json({ error: '恢复版本失败' });
+  }
+});
+
+// Internal: check if a user owns a document (used by user-service for share authorization)
+app.get('/internal/check-ownership', async (req, res) => {
+  try {
+    const userId = typeof req.query.userId === 'string' ? req.query.userId : '';
+    const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : '';
+
+    if (!userId || !documentId) {
+      return res.status(400).json({ error: '缺少 userId 或 documentId' });
+    }
+
+    const db = await getDb();
+    let objectId: ObjectId;
+    try {
+      objectId = new ObjectId(documentId);
+    } catch {
+      return res.json({ owner: false });
+    }
+
+    const doc = await db.collection('documents').findOne({ _id: objectId });
+    if (!doc) return res.json({ owner: false });
+
+    res.json({ owner: doc.ownerId === userId });
+  } catch (error) {
+    console.error('Check ownership error:', error);
+    res.status(500).json({ error: '检查所有权失败' });
   }
 });
 

@@ -4,15 +4,31 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotes } from '../contexts/NotesContext';
-import { api, streamAI } from '../lib/api';
+import { api, ApiError, streamAI } from '../lib/api';
+import {
+  getCachedNote,
+  queueChange,
+  removeServerConflictCopy,
+  upsertCachedNote,
+  type OfflineNote,
+  type OfflineSyncStatus,
+} from '../lib/offlineDb';
 import Editor from '../components/Editor';
+import VersionHistory from '../components/VersionHistory';
+import ShareDialog from '../components/ShareDialog';
+import { htmlToMarkdown, downloadFile } from '../lib/markdownConvert';
 
 interface NoteDetail {
   id: string;
   title: string;
   content: string;
   updatedAt: string;
+  createdAt?: string;
+  serverUpdatedAt?: string;
+  baseUpdatedAt?: string;
   sourcePdfId?: string;
+  syncStatus?: OfflineSyncStatus;
+  error?: string;
 }
 
 type CollabStatus = 'connecting' | 'connected' | 'disconnected' | 'synced';
@@ -89,10 +105,43 @@ function textToParagraphs(value: string) {
     .join('');
 }
 
+function cachedToDetail(note: OfflineNote): NoteDetail {
+  return {
+    id: note.id,
+    title: note.title,
+    content: note.content,
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    serverUpdatedAt: note.serverUpdatedAt,
+    baseUpdatedAt: note.baseUpdatedAt,
+    sourcePdfId: note.sourcePdfId,
+    syncStatus: note.syncStatus,
+    error: note.error,
+  };
+}
+
+function detailToCached(note: NoteDetail, userId: string): OfflineNote {
+  const now = new Date().toISOString();
+  return {
+    id: note.id,
+    userId,
+    title: note.title,
+    content: note.content,
+    createdAt: note.createdAt ?? note.updatedAt ?? now,
+    updatedAt: note.updatedAt ?? now,
+    serverUpdatedAt: note.serverUpdatedAt ?? note.updatedAt,
+    baseUpdatedAt: note.baseUpdatedAt ?? note.serverUpdatedAt ?? note.updatedAt,
+    localUpdatedAt: note.updatedAt ?? now,
+    sourcePdfId: note.sourcePdfId,
+    syncStatus: note.syncStatus ?? 'synced',
+    error: note.error,
+  };
+}
+
 export default function EditorPage() {
   const { id } = useParams<{ id: string }>();
   const { token, user } = useAuth();
-  const { fetchNotes } = useNotes();
+  const { fetchNotes, online, syncing, syncNow, upsertLocalNote, resolveConflict } = useNotes();
   const navigate = useNavigate();
 
   const [note, setNote] = useState<NoteDetail | null>(null);
@@ -120,33 +169,90 @@ export default function EditorPage() {
   const [showPolishModal, setShowPolishModal] = useState(false);
 
   const [insertRequest, setInsertRequest] = useState<{ id: number; html: string } | null>(null);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [showShareDialog, setShowShareDialog] = useState(false);
 
   const contentRef = useRef('');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const streamAbortRef = useRef<AbortController | null>(null);
+  const collabSyncedRef = useRef(false);
 
-  // Load note from server
   useEffect(() => {
-    if (!id || !token) return;
+    if (!id || !token || !user) return;
 
+    let cancelled = false;
     setLoading(true);
-    api
-      .get<NoteDetail>(`/api/doc/notes/${id}`, token)
-      .then((data) => {
-        setNote(data);
-        setTitle(data.title);
-        contentRef.current = data.content;
-      })
-      .catch((err) => {
+
+    async function loadNote() {
+      const cached = await getCachedNote(user!.id, id!);
+      if (cached && !cancelled) {
+        const localNote = cachedToDetail(cached);
+        setNote(localNote);
+        setTitle(localNote.title);
+        contentRef.current = localNote.content;
+        setLoading(false);
+      }
+
+      try {
+        if (!navigator.onLine || id!.startsWith('local-')) {
+          if (!cached && !cancelled) navigate('/', { replace: true });
+          return;
+        }
+
+        const data = await api.get<NoteDetail>(`/api/doc/notes/${id}`, token);
+        if (cancelled) return;
+        const detail = {
+          ...data,
+          createdAt: data.createdAt ?? data.updatedAt,
+          serverUpdatedAt: data.updatedAt,
+          baseUpdatedAt: data.updatedAt,
+          syncStatus: 'synced' as const,
+        };
+        setNote(detail);
+        setTitle(detail.title);
+        contentRef.current = detail.content;
+        await upsertLocalNote(detailToCached(detail, user!.id));
+      } catch (err) {
         console.error('Failed to load note:', err);
-        navigate('/', { replace: true });
-      })
-      .finally(() => setLoading(false));
-  }, [id, token, navigate]);
+        if (!cached && !cancelled) navigate('/', { replace: true });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadNote();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, token, user, navigate, upsertLocalNote]);
 
   useEffect(() => {
-    if (!id || !token || !note) return;
+    function handleIdReplaced(event: Event) {
+      const detail = (event as CustomEvent<{ localId: string; remoteId: string }>).detail;
+      if (detail.localId === id) {
+        navigate(`/note/${detail.remoteId}`, { replace: true });
+      }
+    }
 
+    window.addEventListener('note-id-replaced', handleIdReplaced);
+    return () => window.removeEventListener('note-id-replaced', handleIdReplaced);
+  }, [id, navigate]);
+
+  useEffect(() => {
+    if (!id || !token || !user) return;
+    const userId = user.id;
+    const userName = user.displayName ?? user.email ?? '协作者';
+    const userColor = getUserColor(userId ?? token);
+
+    if (!online || id.startsWith('local-')) {
+      collabSyncedRef.current = false;
+      setCollabStatus('disconnected');
+      setCollaboratorCount(1);
+      setCollaboration(null);
+      return;
+    }
+
+    collabSyncedRef.current = false;
     setCollabStatus('connecting');
     setCollaboratorCount(1);
 
@@ -165,16 +271,40 @@ export default function EditorPage() {
     };
 
     const handleStatus = ({ status }: { status: 'connected' | 'connecting' | 'disconnected' }) => {
+      if (status === 'connected' && provider.synced) {
+        collabSyncedRef.current = true;
+        setCollabStatus('synced');
+        return;
+      }
+
+      if (status === 'connected' && collabSyncedRef.current) {
+        setCollabStatus('synced');
+        return;
+      }
+
+      if (status !== 'connected') {
+        collabSyncedRef.current = false;
+      }
+
       setCollabStatus(status);
     };
 
     const handleSynced = (synced: boolean) => {
-      if (synced) setCollabStatus('synced');
+      collabSyncedRef.current = synced;
+      setCollabStatus(
+        synced
+          ? 'synced'
+          : provider.wsconnected
+            ? 'connected'
+            : provider.wsconnecting
+              ? 'connecting'
+              : 'disconnected'
+      );
     };
 
     provider.awareness.setLocalStateField('user', {
-      name: user?.displayName ?? user?.email ?? '协作者',
-      color: getUserColor(user?.id ?? token),
+      name: userName,
+      color: userColor,
     });
     provider.awareness.on('update', updateAwarenessCount);
     provider.on('status', handleStatus);
@@ -184,6 +314,7 @@ export default function EditorPage() {
     updateAwarenessCount();
 
     return () => {
+      collabSyncedRef.current = false;
       provider.awareness.off('update', updateAwarenessCount);
       provider.off('status', handleStatus);
       provider.off('synced', handleSynced);
@@ -191,25 +322,129 @@ export default function EditorPage() {
       document.destroy();
       setCollaboration(null);
     };
-  }, [id, note, token, user]);
+  }, [id, online, token, user?.displayName, user?.email, user?.id]);
 
   // Save to server
   const saveToServer = useCallback(async () => {
-    if (!id || !token) return;
+    if (!id || !token || !user || !note) return;
     setSaving(true);
+    const now = new Date().toISOString();
+    const isCollabActive = collaboration != null;
+    const localNote: OfflineNote = {
+      id,
+      userId: user.id,
+      title,
+      content: contentRef.current,
+      createdAt: note.createdAt ?? note.updatedAt ?? now,
+      updatedAt: note.updatedAt ?? now,
+      serverUpdatedAt: note.serverUpdatedAt,
+      baseUpdatedAt: note.baseUpdatedAt ?? note.serverUpdatedAt ?? note.updatedAt,
+      localUpdatedAt: now,
+      sourcePdfId: note.sourcePdfId,
+      syncStatus: 'pending',
+    };
+
     try {
-      await api.put(`/api/doc/notes/${id}`, {
+      // When collaboration is active, content is persisted via Yjs/CRDT by the
+      // collab-service.  Only save the title via REST to avoid dual-write
+      // conflicts and stale baseUpdatedAt causing spurious 409 errors.
+      if (isCollabActive) {
+        if (!navigator.onLine || id.startsWith('local-')) {
+          setSaving(false);
+          return;
+        }
+        try {
+          await api.put(`/api/doc/notes/${id}`, { title }, token);
+          setLastSaved(new Date().toLocaleTimeString());
+        } catch (titleErr) {
+          console.error('Title save failed during collab:', titleErr);
+        }
+        setSaving(false);
+        return;
+      }
+
+      await upsertLocalNote(localNote);
+
+      if (!navigator.onLine || id.startsWith('local-')) {
+        await queueChange({
+          userId: user.id,
+          noteId: id,
+          type: id.startsWith('local-') ? 'create' : 'update',
+          title,
+          content: contentRef.current,
+          createdAt: localNote.createdAt,
+          baseUpdatedAt: localNote.baseUpdatedAt,
+        });
+        setNote(cachedToDetail(localNote));
+        setLastSaved(`${new Date().toLocaleTimeString()} 本地`);
+        await syncNow();
+        return;
+      }
+
+      const saved = await api.put<NoteDetail>(`/api/doc/notes/${id}`, {
         title,
         content: contentRef.current,
+        baseUpdatedAt: localNote.baseUpdatedAt,
       }, token);
+      const synced = {
+        ...localNote,
+        title: saved.title ?? title,
+        content: saved.content ?? contentRef.current,
+        updatedAt: saved.updatedAt,
+        serverUpdatedAt: saved.updatedAt,
+        baseUpdatedAt: saved.updatedAt,
+        localUpdatedAt: saved.updatedAt,
+        syncStatus: 'synced' as const,
+        error: undefined,
+      };
+      await removeServerConflictCopy(user.id, id);
+      await upsertLocalNote(synced);
+      setNote(cachedToDetail(synced));
       setLastSaved(new Date().toLocaleTimeString());
       fetchNotes(); // refresh sidebar list
     } catch (err) {
       console.error('Save failed:', err);
+      if (err instanceof ApiError && err.status === 409) {
+        const data = err.data as { serverNote?: NoteDetail };
+        await upsertLocalNote({
+          ...localNote,
+          syncStatus: 'conflict',
+          error: '服务器版本已更新，请选择保留本地草稿或使用服务器版本。',
+        });
+        if (data.serverNote) {
+          await upsertCachedNote(detailToCached({
+            ...data.serverNote,
+            id: `${id}__server`,
+            serverUpdatedAt: data.serverNote.updatedAt,
+            baseUpdatedAt: data.serverNote.updatedAt,
+            syncStatus: 'synced',
+          }, user.id));
+        }
+        setNote({
+          ...cachedToDetail(localNote),
+          syncStatus: 'conflict',
+          error: '服务器版本已更新，请选择保留本地草稿或使用服务器版本。',
+        });
+      } else {
+        await queueChange({
+          userId: user.id,
+          noteId: id,
+          type: id.startsWith('local-') ? 'create' : 'update',
+          title,
+          content: contentRef.current,
+          createdAt: localNote.createdAt,
+          baseUpdatedAt: localNote.baseUpdatedAt,
+        });
+        setNote(cachedToDetail({
+          ...localNote,
+          error: '网络不可用或服务器暂时不可达，已保存在本地等待同步。',
+        }));
+        setLastSaved(`${new Date().toLocaleTimeString()} 本地`);
+      }
     } finally {
       setSaving(false);
     }
-  }, [id, token, title, fetchNotes]);
+  }, [collaboration, fetchNotes, id, note, syncNow, title, token, upsertLocalNote, user]);
 
   // Debounced auto-save (3 seconds after last edit)
   const scheduleSave = useCallback(() => {
@@ -223,8 +458,13 @@ export default function EditorPage() {
   const handleContentUpdate = useCallback(
     (html: string) => {
       contentRef.current = html;
+      // During collaboration, content is synced via Yjs — no need to trigger
+      // the debounced REST save.  Title changes still go through scheduleSave.
+      if (!collaboration) {
+        scheduleSave();
+      }
     },
-    []
+    [collaboration, scheduleSave]
   );
 
   // Handle title change
@@ -393,6 +633,41 @@ export default function EditorPage() {
     scheduleSave();
   };
 
+  const handleResolveConflict = async (resolution: 'local' | 'server') => {
+    if (!id || !user) return;
+    await resolveConflict(id, resolution);
+    const next = await getCachedNote(user.id, id);
+    if (next) {
+      const detail = cachedToDetail(next);
+      setNote(detail);
+      setTitle(detail.title);
+      contentRef.current = detail.content;
+    }
+  };
+
+  const handleExportMarkdown = useCallback(() => {
+    const md = htmlToMarkdown(contentRef.current);
+    downloadFile(md, `${title || '笔记'}.md`, 'text/markdown');
+  }, [title]);
+
+  const handleExportHtml = useCallback(() => {
+    downloadFile(contentRef.current, `${title || '笔记'}.html`, 'text/html');
+  }, [title]);
+
+  const handleRestoreVersion = useCallback(
+    (result: { content: string; title: string; restoredYjs?: boolean }) => {
+      contentRef.current = result.content;
+      setTitle(result.title);
+      setNote((prev) => (prev ? { ...prev, content: result.content, title: result.title } : prev));
+      fetchNotes();
+
+      // The collaborative editor keeps its Yjs document in memory. Reload after a
+      // restore so the provider reconnects against the restored persisted state.
+      window.setTimeout(() => window.location.reload(), 50);
+    },
+    [fetchNotes],
+  );
+
   // Ctrl+S to save immediately
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -463,6 +738,9 @@ export default function EditorPage() {
           placeholder="笔记标题"
         />
         <div className="editor-status">
+          <span className={`offline-status offline-status-${note.syncStatus ?? 'synced'}`}>
+            {!online ? '离线编辑' : note.syncStatus === 'pending' ? '待同步' : note.syncStatus === 'conflict' ? '有冲突' : syncing ? '同步中…' : '已同步'}
+          </span>
           <span className={`collab-status collab-status-${collabStatus}`}>
             {getStatusText(collabStatus, collaboratorCount)}
           </span>
@@ -470,6 +748,30 @@ export default function EditorPage() {
           {!saving && lastSaved && (
             <span className="status-saved">已保存 {lastSaved}</span>
           )}
+          {id && !id.startsWith('local-') && (
+            <>
+              <button
+                className="btn-secondary"
+                onClick={() => setShowShareDialog(true)}
+                title="分享笔记"
+              >
+                分享
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => setShowVersionHistory(true)}
+                title="查看版本历史"
+              >
+                版本历史
+              </button>
+            </>
+          )}
+          <button className="btn-secondary" onClick={handleExportMarkdown} title="导出为 Markdown">
+            导出 .md
+          </button>
+          <button className="btn-secondary" onClick={handleExportHtml} title="导出为 HTML">
+            导出 .html
+          </button>
           <button className="btn-save" onClick={saveToServer} disabled={saving}>
             {saving ? '保存中…' : '保存'}
           </button>
@@ -477,6 +779,17 @@ export default function EditorPage() {
       </header>
 
       <section className="ai-workbench">
+        {note.syncStatus === 'conflict' && (
+          <div className="sync-conflict-panel">
+            <span>{note.error ?? '服务器版本已更新，请处理当前本地草稿。'}</span>
+            <button type="button" className="btn-secondary" onClick={() => handleResolveConflict('local')}>
+              保留本地草稿
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => handleResolveConflict('server')}>
+              使用服务器版本
+            </button>
+          </div>
+        )}
         <div className="pdf-upload-control">
           <label className="btn-secondary">
             {uploadingPdf ? '解析中…' : '上传 PDF'}
@@ -579,6 +892,23 @@ export default function EditorPage() {
         }
       />
 
+      {/* Version History */}
+      {showVersionHistory && id && (
+        <VersionHistory
+          documentId={id}
+          onClose={() => setShowVersionHistory(false)}
+          onRestore={handleRestoreVersion}
+        />
+      )}
+
+      {/* Share Dialog */}
+      {showShareDialog && id && (
+        <ShareDialog
+          documentId={id}
+          onClose={() => setShowShareDialog(false)}
+        />
+      )}
+
       {/* Polish Modal */}
       {showPolishModal && (
         <div className="polish-modal-overlay" onClick={() => {
@@ -620,6 +950,13 @@ export default function EditorPage() {
                 <button
                   type="button"
                   className="btn-primary"
+                  onClick={() => applyPolishResult(true)}
+                >
+                  替换选中文本
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
                   onClick={() => applyPolishResult(false)}
                 >
                   插入笔记

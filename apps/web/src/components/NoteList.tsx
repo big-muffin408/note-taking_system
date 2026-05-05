@@ -50,9 +50,14 @@ export default function NoteList() {
             to={`/note/${note.id}`}
             className={({ isActive }) => `note-item${isActive ? ' active' : ''}`}
           >
-            <span className="note-item-main">
-              <span className="note-item-title">{note.title || '未命名笔记'}</span>
-              <span className="note-item-date">
+              <span className="note-item-main">
+                <span className="note-item-title">{note.title || '未命名笔记'}</span>
+                {note.syncStatus && note.syncStatus !== 'synced' && (
+                  <span className={`note-sync-badge note-sync-badge-${note.syncStatus}`}>
+                    {note.syncStatus === 'pending' ? '待同步' : note.syncStatus === 'conflict' ? '冲突' : '离线'}
+                  </span>
+                )}
+                <span className="note-item-date">
                 {new Date(note.updatedAt).toLocaleDateString('zh-CN', {
                   month: 'short',
                   day: 'numeric',

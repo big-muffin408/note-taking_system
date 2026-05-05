@@ -79,6 +79,63 @@ export async function ensureUserSchema() {
       'CREATE UNIQUE INDEX idx_users_oauth_provider_subject ON users (oauth_provider, oauth_subject)'
     );
   }
+
+  // Shares table for document sharing permissions
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shares (
+      id VARCHAR(36) PRIMARY KEY,
+      document_id VARCHAR(64) NOT NULL,
+      sharer_id VARCHAR(36) NOT NULL,
+      sharee_id VARCHAR(36) NOT NULL,
+      permission ENUM('read', 'write') NOT NULL DEFAULT 'read',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY idx_share_doc_sharee (document_id, sharee_id),
+      INDEX idx_share_sharee (sharee_id)
+    )
+  `);
+
+  // Audit logs table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NULL,
+      action VARCHAR(100) NOT NULL,
+      target_id VARCHAR(64) NULL,
+      metadata JSON NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_audit_user (user_id, created_at),
+      INDEX idx_audit_action (action, created_at)
+    )
+  `);
+
+  // Account lockout columns
+  const [failedLoginRows] = await pool.query(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'users'
+       AND COLUMN_NAME = 'failed_login_attempts'`
+  );
+
+  if ((failedLoginRows as unknown[]).length === 0) {
+    await pool.query(
+      'ALTER TABLE users ADD COLUMN failed_login_attempts INT DEFAULT 0 AFTER oauth_subject'
+    );
+  }
+
+  const [lockedUntilRows] = await pool.query(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'users'
+       AND COLUMN_NAME = 'locked_until'`
+  );
+
+  if ((lockedUntilRows as unknown[]).length === 0) {
+    await pool.query(
+      'ALTER TABLE users ADD COLUMN locked_until TIMESTAMP NULL AFTER failed_login_attempts'
+    );
+  }
 }
 
 export default pool;

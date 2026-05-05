@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
+import { saveAuthToken, clearAuthToken } from '../lib/offlineDb';
 
 interface User {
   id: string;
@@ -34,7 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     api
       .get<User>('/api/user/me', token)
-      .then((u) => setUser(u))
+      .then((u) => { setUser(u); saveAuthToken(token); })
       .catch(() => {
         localStorage.removeItem(TOKEN_KEY);
         setToken(null);
@@ -50,6 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(TOKEN_KEY, data.token);
     setToken(data.token);
     setUser(data.user);
+    saveAuthToken(data.token);
   }, []);
 
   const requestVerificationCode = useCallback(async (email: string) => {
@@ -68,6 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem(TOKEN_KEY, data.token);
       setToken(data.token);
       setUser(data.user);
+      saveAuthToken(data.token);
     },
     []
   );
@@ -75,12 +78,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const completeOAuthLogin = useCallback(async (nextToken: string) => {
     localStorage.setItem(TOKEN_KEY, nextToken);
     setToken(nextToken);
+    saveAuthToken(nextToken);
     const currentUser = await api.get<User>('/api/user/me', nextToken);
     setUser(currentUser);
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
+    clearAuthToken();
     setToken(null);
     setUser(null);
   }, []);

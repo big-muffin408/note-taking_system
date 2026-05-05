@@ -2,9 +2,11 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  data: unknown;
+  constructor(message: string, status: number, data?: unknown) {
     super(message);
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -29,7 +31,7 @@ async function request<T>(
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError(data.error ?? `请求失败 (${res.status})`, res.status);
+    throw new ApiError(data.error ?? `请求失败 (${res.status})`, res.status, data);
   }
 
   return res.json();

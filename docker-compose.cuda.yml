@@ -3,6 +3,8 @@ services:
     build:
       context: ./services/ai-service
       dockerfile: Dockerfile.cuda
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
     environment:
       PDF_PARSE_PROVIDER: ${PDF_PARSE_PROVIDER:-mineru}
       MINERU_COMMAND: ${MINERU_COMMAND:-mineru}

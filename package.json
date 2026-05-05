@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "start:all": "bash scripts/start-all.sh",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "docker:up": "docker compose -f docker-compose.yml -f docker-compose.mineru.yml up --build",

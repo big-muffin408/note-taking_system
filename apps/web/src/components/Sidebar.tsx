@@ -2,12 +2,13 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotes } from '../contexts/NotesContext';
+import { markdownToHtml, readFileAsText } from '../lib/markdownConvert';
 import NoteList from './NoteList';
 import ThemeToggle from './ThemeToggle';
 
 export default function Sidebar() {
   const { user, logout } = useAuth();
-  const { createNote } = useNotes();
+  const { createNote, online, syncing, syncNow } = useNotes();
   const navigate = useNavigate();
 
   async function handleNewNote() {
@@ -16,6 +17,23 @@ export default function Sidebar() {
       navigate(`/note/${note.id}`);
     } catch (err) {
       console.error('Failed to create note:', err);
+    }
+  }
+
+  async function handleImportMarkdown(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      const md = await readFileAsText(file);
+      const html = markdownToHtml(md);
+      const title = file.name.replace(/\.md$/i, '') || '导入的笔记';
+      const note = await createNote(title);
+      // Navigate to the note and the content will be set via the editor
+      navigate(`/note/${note.id}?import=1`, { state: { importContent: html } });
+    } catch (err) {
+      console.error('Failed to import markdown:', err);
     }
   }
 
@@ -33,6 +51,14 @@ export default function Sidebar() {
         <button className="btn-new-note" onClick={handleNewNote}>
           <span>+</span> 新建笔记
         </button>
+        <label className="btn-import-md">
+          导入 .md
+          <input
+            type="file"
+            accept=".md,.markdown,text/markdown"
+            onChange={handleImportMarkdown}
+          />
+        </label>
       </div>
 
       <div className="sidebar-notes">
@@ -41,6 +67,9 @@ export default function Sidebar() {
 
       <div className="sidebar-bottom">
         <ThemeToggle />
+        <button className="sync-status-button" onClick={syncNow} disabled={!online || syncing} title="同步离线改动">
+          {!online ? '离线' : syncing ? '同步中…' : '同步'}
+        </button>
         <div className="user-info">
           <div className="user-avatar">
             {user?.displayName?.charAt(0)?.toUpperCase() ?? '?'}

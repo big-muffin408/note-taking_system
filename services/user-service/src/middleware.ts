@@ -30,3 +30,12 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
 export function signToken(payload: { id: string; email: string }): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 }
+
+export function adminMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
+  // Must be called after authMiddleware
+  if (!req.userId) {
+    return res.status(401).json({ error: '未认证' });
+  }
+  // Role check is done in the route handler since we need to query the DB
+  next();
+}

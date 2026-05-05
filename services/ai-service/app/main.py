@@ -74,6 +74,32 @@ def provider_name() -> str:
     return getenv("AI_PROVIDER", "mock").lower()
 
 
+def ai_model_name(provider: str) -> str:
+    configured_model = getenv("AI_MODEL", "").strip()
+    if configured_model:
+        return configured_model
+    if provider == "xiaomi":
+        return "mimo-v2.5-pro"
+    if provider == "openai":
+        return "gpt-4o-mini"
+    if provider == "deepseek":
+        return "deepseek-chat"
+    return "mock-model"
+
+
+def ai_base_url(provider: str) -> str:
+    configured_base_url = getenv("AI_BASE_URL", "").strip()
+    if configured_base_url:
+        return configured_base_url.rstrip("/")
+    if provider == "deepseek":
+        return "https://api.deepseek.com"
+    if provider == "openai":
+        return "https://api.openai.com/v1"
+    if provider == "xiaomi":
+        return "https://token-plan-cn.xiaomimimo.com/v1"
+    raise HTTPException(status_code=400, detail=f"Unsupported AI_PROVIDER: {provider}")
+
+
 def normalize_text(text: str) -> str:
     text = text.replace("\x00", " ")
     text = re.sub(r"[ \t]+", " ", text)
@@ -482,18 +508,13 @@ async def search_chunks(query: str, document_id: Optional[str], note_id: Optiona
 async def call_model(messages: list[dict[str, str]]) -> str:
     provider = provider_name()
     api_key = getenv("AI_API_KEY", "")
-    model = getenv("AI_MODEL", "deepseek-chat")
+    model = ai_model_name(provider)
 
     if provider == "mock" or not api_key:
         content = messages[-1]["content"]
         return f"Mock AI response: {content[:500]}"
 
-    if provider == "deepseek":
-        base_url = (getenv("AI_BASE_URL") or "https://api.deepseek.com").rstrip("/")
-    elif provider == "openai":
-        base_url = (getenv("AI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported AI_PROVIDER: {provider}")
+    base_url = ai_base_url(provider)
 
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
@@ -510,7 +531,7 @@ async def stream_model(messages: list[dict[str, str]]) -> AsyncGenerator[str, No
     """Yield text chunks via SSE. For mock provider, simulate character-by-character output."""
     provider = provider_name()
     api_key = getenv("AI_API_KEY", "")
-    model = getenv("AI_MODEL", "deepseek-chat")
+    model = ai_model_name(provider)
 
     if provider == "mock" or not api_key:
         content = messages[-1]["content"]
@@ -519,12 +540,7 @@ async def stream_model(messages: list[dict[str, str]]) -> AsyncGenerator[str, No
             yield char
         return
 
-    if provider == "deepseek":
-        base_url = (getenv("AI_BASE_URL") or "https://api.deepseek.com").rstrip("/")
-    elif provider == "openai":
-        base_url = (getenv("AI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported AI_PROVIDER: {provider}")
+    base_url = ai_base_url(provider)
 
     async with httpx.AsyncClient(timeout=60) as client:
         async with client.stream(
@@ -573,7 +589,7 @@ def health():
         "service": "ai-service",
         "status": "ok",
         "provider": provider_name(),
-        "model": getenv("AI_MODEL", "mock-model"),
+        "model": ai_model_name(provider_name()),
         "pdfParseProvider": PDF_PARSE_PROVIDER,
         "mineruBackend": MINERU_BACKEND,
         "qdrantCollection": QDRANT_COLLECTION,

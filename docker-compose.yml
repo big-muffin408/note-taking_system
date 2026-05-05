@@ -32,6 +32,7 @@ services:
     environment:
       PORT: 3001
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      DOCUMENT_SERVICE_URL: http://document-service:3002
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
       SERVER_PUBLIC_URL: ${SERVER_PUBLIC_URL:-http://localhost}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -89,11 +90,13 @@ services:
   ai-service:
     build:
       context: ./services/ai-service
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
     environment:
       PORT: 3003
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-deepseek-chat}
+      AI_MODEL: ${AI_MODEL:-}
       AI_BASE_URL: ${AI_BASE_URL:-}
       PDF_PARSE_PROVIDER: ${PDF_PARSE_PROVIDER:-mineru}
       MINERU_COMMAND: ${MINERU_COMMAND:-mineru}
@@ -114,6 +117,8 @@ services:
       context: ./services/collab-service
     environment:
       PORT: 3004
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      USER_SERVICE_URL: http://user-service:3001
       MONGO_URL: mongodb://${MONGO_INITDB_ROOT_USERNAME:-notes_admin}:${MONGO_INITDB_ROOT_PASSWORD:-notes_password}@mongodb:27017
       REDIS_URL: redis://redis:6379
     depends_on:
@@ -129,6 +134,8 @@ services:
       context: ./services/sync-service
     environment:
       PORT: 3005
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      USER_SERVICE_URL: http://user-service:3001
       MYSQL_HOST: mysql
       MONGO_URL: mongodb://${MONGO_INITDB_ROOT_USERNAME:-notes_admin}:${MONGO_INITDB_ROOT_PASSWORD:-notes_password}@mongodb:27017
     depends_on:

@@ -5,10 +5,22 @@ import nodemailer from 'nodemailer';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import pool, { ensureUserSchema } from './db.js';
-import { authMiddleware, signToken, type AuthRequest } from './middleware.js';
+import { authMiddleware, adminMiddleware, signToken, type AuthRequest } from './middleware.js';
+
+async function auditLog(userId: string | null, action: string, targetId?: string, metadata?: Record<string, unknown>) {
+  try {
+    await pool.query(
+      'INSERT INTO audit_logs (id, user_id, action, target_id, metadata) VALUES (?, ?, ?, ?, ?)',
+      [uuidv4(), userId, action, targetId ?? null, metadata ? JSON.stringify(metadata) : null]
+    );
+  } catch {
+    // Silently ignore audit log failures
+  }
+}
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
+const documentServiceUrl = process.env.DOCUMENT_SERVICE_URL ?? 'http://localhost:3002';
 const googleClientId = process.env.GOOGLE_CLIENT_ID;
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const appBaseUrl = process.env.APP_BASE_URL ?? 'http://localhost';
@@ -243,6 +255,8 @@ app.post('/register', async (req, res) => {
       [id, email, displayName, passwordHash]
     );
 
+    await auditLog(id, 'register', id, { email });
+
     const token = signToken({ id, email });
 
     res.status(201).json({
@@ -264,7 +278,7 @@ app.post('/login', async (req, res) => {
     }
 
     const [rows] = await pool.query(
-      'SELECT id, email, display_name, password_hash, role FROM users WHERE email = ?',
+      'SELECT id, email, display_name, password_hash, role, failed_login_attempts, locked_until FROM users WHERE email = ?',
       [email]
     );
 
@@ -274,6 +288,13 @@ app.post('/login', async (req, res) => {
     }
 
     const user = users[0];
+
+    // Check account lockout
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      const minutes = Math.ceil((new Date(user.locked_until).getTime() - Date.now()) / 60000);
+      return res.status(403).json({ error: `账号已锁定，请 ${minutes} 分钟后重试` });
+    }
+
     if (!user.password_hash) {
       return res.status(401).json({ error: '该账号已绑定 Google 登录，请使用 Google 登录' });
     }
@@ -281,8 +302,32 @@ app.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password_hash);
 
     if (!isMatch) {
+      // Increment failed attempts
+      const attempts = (user.failed_login_attempts || 0) + 1;
+      if (attempts >= 5) {
+        await pool.query(
+          'UPDATE users SET failed_login_attempts = ?, locked_until = DATE_ADD(CURRENT_TIMESTAMP, INTERVAL 15 MINUTE) WHERE id = ?',
+          [attempts, user.id]
+        );
+        await auditLog(user.id, 'login_locked', user.id, { email, attempts });
+        return res.status(403).json({ error: '连续失败次数过多，账号已锁定 15 分钟' });
+      } else {
+        await pool.query(
+          'UPDATE users SET failed_login_attempts = ? WHERE id = ?',
+          [attempts, user.id]
+        );
+      }
+      await auditLog(user.id, 'login_failed', user.id, { email, attempts });
       return res.status(401).json({ error: '邮箱或密码错误' });
     }
+
+    // Successful login: reset lockout
+    await pool.query(
+      'UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?',
+      [user.id]
+    );
+
+    await auditLog(user.id, 'login_success', user.id, { email });
 
     const token = signToken({ id: user.id, email: user.email });
 
@@ -418,6 +463,8 @@ app.get('/google/callback', async (req, res) => {
       }
     }
 
+    await auditLog(user.id, 'google_login', user.id, { email: user.email });
+
     const token = signToken({ id: user.id, email: user.email });
     redirectToOAuthCallback(res, token);
   } catch (error) {
@@ -451,6 +498,271 @@ app.get('/me', authMiddleware, (req: AuthRequest, res) => {
       res.status(500).json({ error: '获取用户信息失败' });
     }
   })();
+});
+
+// --- Admin ---
+
+async function requireAdmin(req: AuthRequest): Promise<boolean> {
+  const [rows] = await pool.query('SELECT role FROM users WHERE id = ?', [req.userId]);
+  const user = (rows as any[])[0];
+  return user?.role === 'admin';
+}
+
+// List all users (admin only)
+app.get('/admin/users', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!(await requireAdmin(req))) {
+      return res.status(403).json({ error: '需要管理员权限' });
+    }
+
+    const [rows] = await pool.query(
+      'SELECT id, email, display_name, role, oauth_provider, failed_login_attempts, locked_until, created_at FROM users ORDER BY created_at DESC'
+    );
+
+    res.json({
+      items: (rows as any[]).map((u) => ({
+        id: u.id,
+        email: u.email,
+        displayName: u.display_name,
+        role: u.role,
+        oauthProvider: u.oauth_provider,
+        failedLoginAttempts: u.failed_login_attempts,
+        lockedUntil: u.locked_until,
+        createdAt: u.created_at,
+      })),
+    });
+  } catch (error) {
+    console.error('Admin list users error:', error);
+    res.status(500).json({ error: '获取用户列表失败' });
+  }
+});
+
+// Change user role (admin only)
+app.put('/admin/users/:id/role', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!(await requireAdmin(req))) {
+      return res.status(403).json({ error: '需要管理员权限' });
+    }
+
+    const { role } = req.body ?? {};
+    if (role !== 'user' && role !== 'admin') {
+      return res.status(400).json({ error: '无效的角色' });
+    }
+
+    await pool.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.id]);
+
+    await auditLog(req.userId!, 'admin_change_role', req.params.id, { newRole: role });
+
+    res.json({ id: req.params.id, role });
+  } catch (error) {
+    console.error('Admin change role error:', error);
+    res.status(500).json({ error: '修改角色失败' });
+  }
+});
+
+// System status (admin only)
+app.get('/admin/system-status', authMiddleware, adminMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!(await requireAdmin(req))) {
+      return res.status(403).json({ error: '需要管理员权限' });
+    }
+
+    const services = [
+      { name: 'user-service', url: `http://localhost:${process.env.PORT ?? 3001}/health` },
+      { name: 'document-service', url: `${process.env.DOCUMENT_SERVICE_URL ?? 'http://localhost:3002'}/health` },
+      { name: 'ai-service', url: `${process.env.AI_SERVICE_URL ?? 'http://localhost:3003'}/health` },
+      { name: 'collab-service', url: `${process.env.COLLAB_SERVICE_URL ?? 'http://localhost:3004'}/health` },
+      { name: 'sync-service', url: `${process.env.SYNC_SERVICE_URL ?? 'http://localhost:3005'}/health` },
+    ];
+
+    const results = await Promise.allSettled(
+      services.map(async (s) => {
+        try {
+          const r = await fetch(s.url, { signal: AbortSignal.timeout(3000) });
+          const data = await r.json().catch(() => ({}));
+          return { name: s.name, status: r.ok ? 'ok' : 'error', data };
+        } catch {
+          return { name: s.name, status: 'unreachable', data: null };
+        }
+      })
+    );
+
+    res.json({
+      services: results.map((r) => (r.status === 'fulfilled' ? r.value : { name: 'unknown', status: 'error', data: null })),
+    });
+  } catch (error) {
+    console.error('Admin system status error:', error);
+    res.status(500).json({ error: '获取系统状态失败' });
+  }
+});
+
+// --- Sharing ---
+
+// Create a share
+app.post('/shares', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const { documentId, email, permission } = req.body ?? {};
+    if (!documentId || !email) {
+      return res.status(400).json({ error: '请提供文档 ID 和被分享者邮箱' });
+    }
+
+    const perm = permission === 'write' ? 'write' : 'read';
+
+    // Find sharee by email
+    const [rows] = await pool.query('SELECT id, display_name FROM users WHERE email = ?', [email.trim().toLowerCase()]);
+    const sharee = (rows as any[])[0];
+    if (!sharee) {
+      return res.status(404).json({ error: '未找到该邮箱对应的用户' });
+    }
+
+    if (sharee.id === req.userId) {
+      return res.status(400).json({ error: '不能分享给自己' });
+    }
+
+    // Verify the current user owns the document
+    try {
+      const ownershipRes = await fetch(
+        `${documentServiceUrl}/internal/check-ownership?userId=${encodeURIComponent(req.userId!)}&documentId=${encodeURIComponent(documentId)}`
+      );
+      if (!ownershipRes.ok) {
+        return res.status(502).json({ error: '无法验证文档所有权' });
+      }
+      const ownershipData = await ownershipRes.json() as { owner: boolean };
+      if (!ownershipData.owner) {
+        return res.status(403).json({ error: '你不是该文档的所有者，无法分享' });
+      }
+    } catch {
+      return res.status(502).json({ error: '无法连接文档服务验证所有权' });
+    }
+
+    const id = uuidv4();
+    await pool.query(
+      `INSERT INTO shares (id, document_id, sharer_id, sharee_id, permission)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE permission = VALUES(permission)`,
+      [id, documentId, req.userId, sharee.id, perm]
+    );
+
+    await auditLog(req.userId!, 'share_create', documentId, { shareeId: sharee.id, permission: perm });
+
+    res.status(201).json({ id, documentId, shareeId: sharee.id, shareeName: sharee.display_name, permission: perm });
+  } catch (error) {
+    console.error('Create share error:', error);
+    res.status(500).json({ error: '创建分享失败' });
+  }
+});
+
+// List shares for a document
+app.get('/shares', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : '';
+    if (!documentId) {
+      return res.status(400).json({ error: '请提供文档 ID' });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT s.id, s.document_id, s.sharee_id, s.permission, s.created_at, u.email, u.display_name
+       FROM shares s JOIN users u ON s.sharee_id = u.id
+       WHERE s.document_id = ? AND s.sharer_id = ?
+       ORDER BY s.created_at DESC`,
+      [documentId, req.userId]
+    );
+
+    res.json({
+      items: (rows as any[]).map((r) => ({
+        id: r.id,
+        documentId: r.document_id,
+        shareeId: r.sharee_id,
+        shareeEmail: r.email,
+        shareeName: r.display_name,
+        permission: r.permission,
+        createdAt: r.created_at,
+      })),
+    });
+  } catch (error) {
+    console.error('List shares error:', error);
+    res.status(500).json({ error: '获取分享列表失败' });
+  }
+});
+
+// List documents shared with me
+app.get('/shares/shared-with-me', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT s.id, s.document_id, s.sharer_id, s.permission, s.created_at, u.email AS sharer_email, u.display_name AS sharer_name
+       FROM shares s JOIN users u ON s.sharer_id = u.id
+       WHERE s.sharee_id = ?
+       ORDER BY s.created_at DESC`,
+      [req.userId]
+    );
+
+    res.json({
+      items: (rows as any[]).map((r) => ({
+        id: r.id,
+        documentId: r.document_id,
+        sharerId: r.sharer_id,
+        sharerEmail: r.sharer_email,
+        sharerName: r.sharer_name,
+        permission: r.permission,
+        createdAt: r.created_at,
+      })),
+    });
+  } catch (error) {
+    console.error('List shared-with-me error:', error);
+    res.status(500).json({ error: '获取共享文档失败' });
+  }
+});
+
+// Revoke a share
+app.delete('/shares/:id', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const [result] = await pool.query(
+      'DELETE FROM shares WHERE id = ? AND sharer_id = ?',
+      [req.params.id, req.userId]
+    );
+
+    if ((result as any).affectedRows === 0) {
+      return res.status(404).json({ error: '分享不存在或无权删除' });
+    }
+
+    await auditLog(req.userId!, 'share_revoke', req.params.id);
+
+    res.json({ deleted: true });
+  } catch (error) {
+    console.error('Delete share error:', error);
+    res.status(500).json({ error: '删除分享失败' });
+  }
+});
+
+// Internal: check access permission for a user on a document
+// Used by document-service and collab-service
+app.get('/internal/check-access', async (req, res) => {
+  try {
+    const userId = typeof req.query.userId === 'string' ? req.query.userId : '';
+    const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : '';
+
+    if (!userId || !documentId) {
+      return res.status(400).json({ error: '缺少 userId 或 documentId' });
+    }
+
+    // Check if user is the document owner (by checking if they created any share for this doc)
+    // Actually, we can't know ownership from MySQL alone. The caller (document-service) already knows ownership.
+    // This endpoint only checks share records.
+    const [rows] = await pool.query(
+      'SELECT permission FROM shares WHERE document_id = ? AND sharee_id = ? LIMIT 1',
+      [documentId, userId]
+    );
+
+    const share = (rows as any[])[0];
+    if (!share) {
+      return res.json({ access: 'none' });
+    }
+
+    res.json({ access: share.permission });
+  } catch (error) {
+    console.error('Check access error:', error);
+    res.status(500).json({ error: '检查权限失败' });
+  }
 });
 
 await ensureUserSchema();

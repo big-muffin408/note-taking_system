@@ -10,7 +10,7 @@ ENV PIP_DEFAULT_TIMEOUT=120
 ENV UV_LINK_MODE=copy
 
 RUN if [ -n "$APT_MIRROR" ]; then \
-      find /etc/apt -type f -name "*.list" -o -name "*.sources" | xargs sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g"; \
+      find /etc/apt -type f \( -name "*.list" -o -name "*.sources" \) -print0 | xargs -0 sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g"; \
     fi \
     && printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries \
     && apt-get update \

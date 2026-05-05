@@ -15,10 +15,13 @@
     "@tiptap/extension-placeholder": "^2.2.4",
     "@tiptap/react": "^2.2.4",
     "@tiptap/starter-kit": "^2.2.4",
+    "@types/turndown": "^5.0.6",
     "@vitejs/plugin-react": "^4.2.1",
+    "marked": "^18.0.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.22.3",
+    "turndown": "^7.2.4",
     "vite": "^5.1.6",
     "y-websocket": "^1.5.0",
     "yjs": "^13.6.30"
@@ -26,6 +29,10 @@
   "devDependencies": {
     "@types/react": "^18.2.64",
     "@types/react-dom": "^18.2.21",
-    "typescript": "^5.4.2"
+    "typescript": "^5.4.2",
+    "vite-plugin-pwa": "^0.20.0",
+    "workbox-precaching": "^7.1.0",
+    "workbox-routing": "^7.1.0",
+    "workbox-strategies": "^7.1.0"
   }
 }
