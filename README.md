@@ -120,30 +120,85 @@ curl http://localhost:3004/health
 
 ## Docker 完整启动
 
+普通 Docker 启动：
+
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-该命令不会额外启动 MinerU API 容器；未提供 `MINERU_API_URL` 且镜像内没有 `mineru` 命令时，PDF 上传会自动回退到 PyMuPDF 文本解析。PyMuPDF 适合轻量文本提取；如果需要更高质量的版面、公式和表格还原，请使用下面的 MinerU API 部署方式。
+该命令不会额外启动 MinerU API 容器；未提供 `MINERU_API_URL` 且镜像内没有 `mineru` 命令时，PDF 上传会自动回退到 PyMuPDF 文本解析。PyMuPDF 适合轻量文本提取；如果需要更高质量的版面、公式和表格还原，请使用下面的 Linux CUDA 启动方式。
 
-CUDA / NVIDIA GPU 版本：
+### Linux + CUDA 服务器启动 MinerU
+
+适用于已安装 NVIDIA 驱动和 Docker GPU runtime 的 Linux 服务器。该模式会额外启动本地 `mineru-api` 容器，`ai-service` 通过内网地址 `http://mineru-api:8000` 调用 MinerU，不会调用外部云端 MinerU API。
+
+1. 准备环境变量：
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up --build
+cp .env.example .env
 ```
 
-CUDA 版本会使用 `services/ai-service/Dockerfile.cuda`，默认 MinerU 后端为 `vlm-vllm-engine`；如需覆盖可设置 `CUDA_MINERU_BACKEND`。主机需要已安装 NVIDIA 驱动、Docker GPU runtime，并能通过 `docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi` 验证 GPU 可见。
+`.env.example` 已按 8GB 显存本机演示给出保守默认值：
 
-官方 MinerU Docker API 部署方式：
+```env
+PDF_PARSE_PROVIDER=mineru
+MINERU_BACKEND=pipeline
+MINERU_LANGUAGE=ch
+MINERU_TIMEOUT_SECONDS=1200
+MINERU_SHM_SIZE=8gb
+NVIDIA_VISIBLE_DEVICES=all
+NVIDIA_DRIVER_CAPABILITIES=compute,utility
+```
+
+2. 确认宿主机和 Docker 容器都能看到 GPU：
+
+```bash
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
+```
+
+3. 启动完整服务和本地 MinerU API：
 
 ```bash
 npm run docker:up:mineru
 ```
 
-该方式会额外启动 `mineru-api` 服务，并让 `ai-service` 通过 `MINERU_API_URL=http://mineru-api:8000` 调用 MinerU 官方 FastAPI 的 `/file_parse` 接口。这样 `ai-service` 不再安装 MinerU，业务镜像构建会更快，MinerU 的大依赖与模型缓存隔离在 `mineru-api` 容器里。
+等价 Docker Compose 命令：
 
-首次构建 `mineru-api` 仍然会比较慢，这是 MinerU 官方镜像依赖和模型环境本身较大导致的；后续会复用 `mineru-cache` volume 和 Docker 构建缓存。
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mineru.yml up --build
+```
+
+首次构建 `mineru-api` 会比较慢，这是 MinerU 官方镜像依赖和模型环境本身较大导致的；后续会复用 `mineru-cache` volume 和 Docker 构建缓存。
+
+如果构建 `ai-service` 或 `mineru-api` 时在 `apt-get install` 处遇到 `502 Bad Gateway`，通常是默认软件源或代理网络临时不可用。项目镜像已经配置 apt 重试；如果重试仍失败，可以换用更近的镜像源重新构建。
+
+`ai-service` 使用 Debian 源，例如：
+
+```bash
+docker compose build \
+  --build-arg APT_MIRROR=http://mirrors.aliyun.com/debian ai-service
+docker compose up --build
+```
+
+`mineru-api` 使用 Ubuntu 源，例如：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mineru.yml build \
+  --build-arg APT_MIRROR=http://mirrors.aliyun.com/ubuntu mineru-api
+npm run docker:up:mineru
+```
+
+4. 启动后确认解析链路已经切到 MinerU API：
+
+```bash
+docker compose ps
+docker compose exec -T ai-service env | grep MINERU
+docker compose exec -T ai-service which mineru
+```
+
+预期结果：`docker compose ps` 能看到 `mineru-api`；`ai-service` 环境里应有 `MINERU_API_URL=http://mineru-api:8000`；`which mineru` 可以为空，这是正常的，因为 MinerU 大依赖运行在独立 `mineru-api` 容器里。上传 PDF 后，返回的 `parser` 应为 `mineru-api`，不应是 `pymupdf`。
 
 访问入口：
 

@@ -2,14 +2,19 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+ARG APT_MIRROR=
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV PIP_DEFAULT_TIMEOUT=120
 ENV UV_LINK_MODE=copy
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+RUN if [ -n "$APT_MIRROR" ]; then \
+      find /etc/apt -type f -name "*.list" -o -name "*.sources" | xargs sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g"; \
+    fi \
+    && printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends --fix-missing libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

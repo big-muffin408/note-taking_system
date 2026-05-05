@@ -12,16 +12,23 @@ services:
     build:
       context: ./infra/mineru
       dockerfile: Dockerfile
+      args:
+        VLLM_BASE_IMAGE: ${MINERU_VLLM_BASE_IMAGE:-vllm/vllm-openai:v0.8.5}
+        MINERU_VERSION: ${MINERU_VERSION:-3.1.4}
+        MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-modelscope}
     environment:
       MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-modelscope}
       MINERU_API_OUTPUT_ROOT: /data/output
       MINERU_API_ENABLE_FASTAPI_DOCS: ${MINERU_API_ENABLE_FASTAPI_DOCS:-1}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
     ports:
       - "${MINERU_API_PORT:-8000}:8000"
     volumes:
       - mineru-output:/data/output
       - mineru-cache:/root/.cache
-    shm_size: "32gb"
+    gpus: all
+    shm_size: "${MINERU_SHM_SIZE:-8gb}"
     ipc: host
     networks:
       - notes-net

@@ -43,6 +43,12 @@ function stripPdfExtension(fileName: string) {
   return fileName.replace(/\.pdf$/i, '').trim() || 'PDF 笔记';
 }
 
+function normalizeUploadedFileName(fileName: string | undefined) {
+  const rawName = fileName?.trim() || 'uploaded.pdf';
+  const decodedName = Buffer.from(rawName, 'latin1').toString('utf8');
+  return decodedName.includes('\uFFFD') ? rawName : decodedName;
+}
+
 function sanitizeObjectSegment(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
@@ -69,7 +75,12 @@ async function putPdfObject(objectName: string, file: Express.Multer.File) {
   );
 }
 
-async function parsePdfWithAi(file: Express.Multer.File, pdfId: ObjectId, noteId: ObjectId) {
+async function parsePdfWithAi(
+  file: Express.Multer.File,
+  pdfId: ObjectId,
+  noteId: ObjectId,
+  fileName: string
+) {
   const form = new FormData();
   const arrayBuffer = file.buffer.buffer.slice(
     file.buffer.byteOffset,
@@ -80,7 +91,7 @@ async function parsePdfWithAi(file: Express.Multer.File, pdfId: ObjectId, noteId
   form.append(
     'file',
     new Blob([arrayBuffer], { type: file.mimetype || 'application/pdf' }),
-    file.originalname
+    fileName
   );
 
   const response = await fetch(`${aiServiceUrl}/pdf/parse`, {
@@ -270,7 +281,7 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
 
     const isPdf =
       file.mimetype === 'application/pdf' ||
-      file.originalname.toLowerCase().endsWith('.pdf');
+      normalizeUploadedFileName(file.originalname).toLowerCase().endsWith('.pdf');
     if (!isPdf) {
       return res.status(400).json({ error: '仅支持上传 PDF 文件' });
     }
@@ -279,11 +290,11 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
     const now = new Date();
     const pdfId = new ObjectId();
     const noteId = new ObjectId();
-    const fileName = file.originalname || 'uploaded.pdf';
+    const fileName = normalizeUploadedFileName(file.originalname);
     const objectName = `${req.userId}/${pdfId.toHexString()}-${sanitizeObjectSegment(fileName)}`;
 
     await putPdfObject(objectName, file);
-    const parsed = await parsePdfWithAi(file, pdfId, noteId);
+    const parsed = await parsePdfWithAi(file, pdfId, noteId, fileName);
     const content = parsed.htmlDraft ?? parsed.markdownDraft;
     const title = stripPdfExtension(fileName);
 
