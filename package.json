@@ -11,7 +11,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "docker:up": "docker compose up --build",
+    "docker:up": "docker compose -f docker-compose.yml -f docker-compose.mineru.yml up --build",
+    "docker:up:mineru": "docker compose -f docker-compose.yml -f docker-compose.mineru.yml up --build",
     "docker:down": "docker compose down"
   },
   "engines": {

@@ -1,0 +1,16 @@
+services:
+  ai-service:
+    build:
+      context: ./services/ai-service
+      dockerfile: Dockerfile.cuda
+    environment:
+      PDF_PARSE_PROVIDER: ${PDF_PARSE_PROVIDER:-mineru}
+      MINERU_COMMAND: ${MINERU_COMMAND:-mineru}
+      MINERU_BACKEND: ${CUDA_MINERU_BACKEND:-vlm-vllm-engine}
+      MINERU_LANGUAGE: ${MINERU_LANGUAGE:-}
+      MINERU_TIMEOUT_SECONDS: ${MINERU_TIMEOUT_SECONDS:-1200}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      VLLM_ENABLE_CUDA_COMPATIBILITY: ${VLLM_ENABLE_CUDA_COMPATIBILITY:-1}
+    gpus: all
+    ipc: host

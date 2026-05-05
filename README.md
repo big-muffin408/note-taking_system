@@ -17,7 +17,7 @@
 - ✅ 协同光标与在线人数状态
 - ✅ 协同服务健康检查（文档数、连接数）
 - ✅ 协同状态轻量持久化（MongoDB `document_updates`）
-- ✅ PDF 上传与高质量解析（默认 MinerU，PyMuPDF fallback，原文件写入 MinIO）
+- ✅ PDF 上传与高质量解析（优先 MinerU，缺少本地 MinerU 命令时回退 PyMuPDF，原文件写入 MinIO）
 - ✅ PDF 解析后自动生成可编辑笔记
 - ✅ AI 摘要与 RAG 问答可演示链路（Qdrant 检索 + mock/deepseek/openai provider）
 
@@ -125,6 +125,26 @@ cp .env.example .env
 docker compose up --build
 ```
 
+该命令不会额外启动 MinerU API 容器；未提供 `MINERU_API_URL` 且镜像内没有 `mineru` 命令时，PDF 上传会自动回退到 PyMuPDF 文本解析。PyMuPDF 适合轻量文本提取；如果需要更高质量的版面、公式和表格还原，请使用下面的 MinerU API 部署方式。
+
+CUDA / NVIDIA GPU 版本：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up --build
+```
+
+CUDA 版本会使用 `services/ai-service/Dockerfile.cuda`，默认 MinerU 后端为 `vlm-vllm-engine`；如需覆盖可设置 `CUDA_MINERU_BACKEND`。主机需要已安装 NVIDIA 驱动、Docker GPU runtime，并能通过 `docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi` 验证 GPU 可见。
+
+官方 MinerU Docker API 部署方式：
+
+```bash
+npm run docker:up:mineru
+```
+
+该方式会额外启动 `mineru-api` 服务，并让 `ai-service` 通过 `MINERU_API_URL=http://mineru-api:8000` 调用 MinerU 官方 FastAPI 的 `/file_parse` 接口。这样 `ai-service` 不再安装 MinerU，业务镜像构建会更快，MinerU 的大依赖与模型缓存隔离在 `mineru-api` 容器里。
+
+首次构建 `mineru-api` 仍然会比较慢，这是 MinerU 官方镜像依赖和模型环境本身较大导致的；后续会复用 `mineru-cache` volume 和 Docker 构建缓存。
+
 访问入口：
 
 - 前端与网关：http://localhost
@@ -215,6 +235,7 @@ npm audit --offline
 - `EMAIL_VERIFICATION_COOLDOWN_SECONDS`：同一邮箱发送间隔，默认 60 秒
 - `AI_PROVIDER`：AI 服务提供者（mock / openai / deepseek）
 - `AI_API_KEY`：AI API 密钥
-- `PDF_PARSE_PROVIDER`：PDF 解析器，默认 `mineru`，也可设为 `pymupdf`
-- `PDF_PARSE_FALLBACK`：MinerU 失败时是否回退到 PyMuPDF，默认 `true`
+- `PDF_PARSE_PROVIDER`：PDF 解析器，默认 `mineru`；也可设为 `pymupdf` 强制使用轻量文本解析。默认 `mineru` 在没有 `MINERU_API_URL` 且找不到 `MINERU_COMMAND` 时会回退到 PyMuPDF
 - `MINERU_BACKEND`：MinerU 后端，默认 `pipeline`，适合 CPU 环境
+- `MINERU_API_URL`：外部 MinerU FastAPI 地址；使用 `docker-compose.mineru.yml` 时会自动设为 `http://mineru-api:8000`
+- `MINERU_MODEL_SOURCE`：MinerU 模型来源，默认 `modelscope`

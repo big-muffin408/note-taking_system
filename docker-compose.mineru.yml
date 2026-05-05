@@ -1,0 +1,31 @@
+services:
+  ai-service:
+    environment:
+      MINERU_API_URL: http://mineru-api:8000
+      MINERU_BACKEND: ${MINERU_BACKEND:-pipeline}
+      MINERU_LANGUAGE: ${MINERU_LANGUAGE:-ch}
+      MINERU_TIMEOUT_SECONDS: ${MINERU_TIMEOUT_SECONDS:-1200}
+    depends_on:
+      - mineru-api
+
+  mineru-api:
+    build:
+      context: ./infra/mineru
+      dockerfile: Dockerfile
+    environment:
+      MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-modelscope}
+      MINERU_API_OUTPUT_ROOT: /data/output
+      MINERU_API_ENABLE_FASTAPI_DOCS: ${MINERU_API_ENABLE_FASTAPI_DOCS:-1}
+    ports:
+      - "${MINERU_API_PORT:-8000}:8000"
+    volumes:
+      - mineru-output:/data/output
+      - mineru-cache:/root/.cache
+    shm_size: "32gb"
+    ipc: host
+    networks:
+      - notes-net
+
+volumes:
+  mineru-output:
+  mineru-cache:

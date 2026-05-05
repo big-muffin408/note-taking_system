@@ -12,7 +12,6 @@ from os import getenv
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
-import fitz
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -23,17 +22,22 @@ try:
 except ImportError:
     markdown_lib = None
 
+try:
+    import fitz
+except ImportError:
+    fitz = None
+
 app = FastAPI(title="AI Service", version="0.3.0")
 
 VECTOR_SIZE = 128
 QDRANT_COLLECTION = getenv("QDRANT_COLLECTION", "note_chunks")
 QDRANT_URL = getenv("QDRANT_URL", "http://localhost:6333").rstrip("/")
 PDF_PARSE_PROVIDER = getenv("PDF_PARSE_PROVIDER", "mineru").lower()
-PDF_PARSE_FALLBACK = getenv("PDF_PARSE_FALLBACK", "true").lower() == "true"
 MINERU_COMMAND = getenv("MINERU_COMMAND", "mineru")
 MINERU_BACKEND = getenv("MINERU_BACKEND", "pipeline")
 MINERU_LANGUAGE = getenv("MINERU_LANGUAGE", "").strip()
 MINERU_TIMEOUT_SECONDS = int(getenv("MINERU_TIMEOUT_SECONDS", "600"))
+MINERU_API_URL = getenv("MINERU_API_URL", "").rstrip("/")
 
 
 class TextRequest(BaseModel):
@@ -75,13 +79,6 @@ def normalize_text(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
-
-
-def text_to_markdown(text: str, title: str) -> str:
-    title = title.rsplit(".", 1)[0].strip() or "PDF 笔记"
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", normalize_text(text)) if p.strip()]
-    body = "\n\n".join(paragraphs)
-    return f"# {title}\n\n{body}" if body else f"# {title}\n\nPDF 中未提取到可用文本。"
 
 
 def markdown_to_html(markdown: str) -> str:
@@ -203,32 +200,6 @@ async def index_chunks(
     return [{"index": i, "text": chunk} for i, chunk in enumerate(chunks)]
 
 
-def get_pdf_page_count(data: bytes) -> int:
-    try:
-        with fitz.open(stream=data, filetype="pdf") as document:
-            return document.page_count
-    except Exception:
-        return 0
-
-
-def parse_pdf_with_pymupdf(data: bytes, filename: str) -> dict[str, Any]:
-    try:
-        document = fitz.open(stream=data, filetype="pdf")
-    except Exception as error:
-        raise HTTPException(status_code=400, detail="PDF 解析失败") from error
-
-    pages = [page.get_text("text") for page in document]
-    text = normalize_text("\n\n".join(pages))
-    markdown = text_to_markdown(text, filename)
-
-    return {
-        "parser": "pymupdf",
-        "pages": document.page_count,
-        "text": text,
-        "markdown": markdown,
-    }
-
-
 def choose_mineru_markdown(output_dir: Path) -> Path:
     markdown_files = [
         path for path in output_dir.rglob("*.md")
@@ -252,12 +223,59 @@ def markdown_to_plain_text(markdown: str) -> str:
     return normalize_text(text)
 
 
+def count_pages_from_mineru_value(value: Any) -> int:
+    if isinstance(value, dict):
+        for key in ("pdf_info", "page_info", "pages"):
+            candidate = value.get(key)
+            if isinstance(candidate, list):
+                return len(candidate)
+            if isinstance(candidate, int):
+                return candidate
+
+        page_indexes = [
+            item.get("page_idx")
+            for item in value.get("content_list", [])
+            if isinstance(item, dict) and isinstance(item.get("page_idx"), int)
+        ]
+        if page_indexes:
+            return max(page_indexes) + 1
+
+        return max((count_pages_from_mineru_value(item) for item in value.values()), default=0)
+
+    if isinstance(value, list):
+        page_indexes = [
+            item.get("page_idx")
+            for item in value
+            if isinstance(item, dict) and isinstance(item.get("page_idx"), int)
+        ]
+        if page_indexes:
+            return max(page_indexes) + 1
+
+        return max((count_pages_from_mineru_value(item) for item in value), default=0)
+
+    return 0
+
+
+def count_pages_from_mineru_output(output_dir: Path) -> int:
+    for json_path in output_dir.rglob("*.json"):
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        pages = count_pages_from_mineru_value(payload)
+        if pages:
+            return pages
+
+    return 0
+
+
 def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
+    if MINERU_API_URL:
+        return parse_pdf_with_mineru_api(data, filename)
+
     if not shutil.which(MINERU_COMMAND):
-        raise RuntimeError(
-            f"MinerU command '{MINERU_COMMAND}' was not found. "
-            "Install mineru[all] or set MINERU_COMMAND."
-        )
+        return parse_pdf_with_pymupdf(data, filename)
 
     safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", filename or "document.pdf")
     if not safe_name.lower().endswith(".pdf"):
@@ -297,10 +315,116 @@ def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
         markdown_path = choose_mineru_markdown(output_path)
         markdown = markdown_path.read_text(encoding="utf-8")
         text = markdown_to_plain_text(markdown)
+        pages = count_pages_from_mineru_output(output_path)
 
     return {
         "parser": "mineru",
-        "pages": get_pdf_page_count(data),
+        "pages": pages,
+        "text": text,
+        "markdown": markdown,
+    }
+
+
+def parse_pdf_with_mineru_api(data: bytes, filename: str) -> dict[str, Any]:
+    file_stem = Path(filename or "document.pdf").stem
+    lang = MINERU_LANGUAGE or "ch"
+    form_data = {
+        "lang_list": lang,
+        "backend": MINERU_BACKEND,
+        "parse_method": "auto",
+        "formula_enable": "true",
+        "table_enable": "true",
+        "return_md": "true",
+        "return_middle_json": "true",
+        "return_model_output": "false",
+        "return_content_list": "false",
+        "return_images": "false",
+        "response_format_zip": "false",
+        "return_original_file": "false",
+    }
+
+    try:
+        with httpx.Client(timeout=MINERU_TIMEOUT_SECONDS, trust_env=False) as client:
+            response = client.post(
+                f"{MINERU_API_URL}/file_parse",
+                data=form_data,
+                files={
+                    "files": (
+                        filename or "document.pdf",
+                        data,
+                        "application/pdf",
+                    )
+                },
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as error:
+        raise RuntimeError(f"MinerU API parse failed: {error}") from error
+
+    payload = response.json()
+    results = payload.get("results") or {}
+    candidates = [
+        results.get(file_stem),
+        results.get(filename),
+        *results.values(),
+    ]
+    markdown = ""
+    pages = 0
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate.get("md_content"):
+            markdown = candidate["md_content"]
+            pages = count_pages_from_mineru_value(candidate)
+            break
+
+    if not markdown:
+        raise RuntimeError("MinerU API did not return md_content.")
+
+    return {
+        "parser": "mineru-api",
+        "pages": pages or count_pages_from_mineru_value(payload),
+        "text": markdown_to_plain_text(markdown),
+        "markdown": markdown,
+    }
+
+
+def parse_pdf_with_pymupdf(data: bytes, filename: str) -> dict[str, Any]:
+    if fitz is None:
+        raise RuntimeError(
+            f"MinerU command '{MINERU_COMMAND}' was not found and PyMuPDF is not installed. "
+            "Install PyMuPDF, set MINERU_API_URL to a running mineru-api service, "
+            "install MinerU, or set MINERU_COMMAND."
+        )
+
+    try:
+        document = fitz.open(stream=data, filetype="pdf")
+    except Exception as error:
+        raise RuntimeError(f"PyMuPDF failed to open PDF: {error}") from error
+
+    markdown_parts: list[str] = []
+    text_parts: list[str] = []
+    page_count = document.page_count
+    metadata = document.metadata or {}
+    title = normalize_text(metadata.get("title") or "") or Path(filename or "PDF 笔记").stem
+    if title:
+        markdown_parts.append(f"# {title}")
+
+    for page_index, page in enumerate(document, start=1):
+        page_text = normalize_text(page.get_text("text"))
+        if not page_text:
+            continue
+
+        markdown_parts.append(f"## 第 {page_index} 页\n\n{page_text}")
+        text_parts.append(page_text)
+
+    document.close()
+
+    text = normalize_text("\n\n".join(text_parts))
+    markdown = "\n\n".join(markdown_parts).strip()
+    if not markdown:
+        markdown = "# PDF 笔记\n\n未能从该 PDF 中提取到可用文本。"
+
+    return {
+        "parser": "pymupdf",
+        "pages": page_count,
         "text": text,
         "markdown": markdown,
     }
@@ -308,20 +432,11 @@ def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
 
 def parse_pdf_document(data: bytes, filename: str) -> dict[str, Any]:
     if PDF_PARSE_PROVIDER == "mineru":
-        try:
-            return parse_pdf_with_mineru(data, filename)
-        except Exception as error:
-            if not PDF_PARSE_FALLBACK:
-                raise
-            print(f"MinerU parse failed, falling back to PyMuPDF: {error}")
-            parsed = parse_pdf_with_pymupdf(data, filename)
-            parsed["parser"] = "pymupdf-fallback"
-            return parsed
-
+        return parse_pdf_with_mineru(data, filename)
     if PDF_PARSE_PROVIDER == "pymupdf":
         return parse_pdf_with_pymupdf(data, filename)
 
-    raise HTTPException(status_code=400, detail=f"Unsupported PDF_PARSE_PROVIDER: {PDF_PARSE_PROVIDER}")
+    raise HTTPException(status_code=400, detail="PDF_PARSE_PROVIDER must be mineru or pymupdf.")
 
 
 def qdrant_filter(document_id: Optional[str], note_id: Optional[str]) -> dict[str, Any] | None:
@@ -460,7 +575,6 @@ def health():
         "provider": provider_name(),
         "model": getenv("AI_MODEL", "mock-model"),
         "pdfParseProvider": PDF_PARSE_PROVIDER,
-        "pdfParseFallback": PDF_PARSE_FALLBACK,
         "mineruBackend": MINERU_BACKEND,
         "qdrantCollection": QDRANT_COLLECTION,
         "timestamp": now_iso(),

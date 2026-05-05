@@ -96,11 +96,11 @@ services:
       AI_MODEL: ${AI_MODEL:-deepseek-chat}
       AI_BASE_URL: ${AI_BASE_URL:-}
       PDF_PARSE_PROVIDER: ${PDF_PARSE_PROVIDER:-mineru}
-      PDF_PARSE_FALLBACK: ${PDF_PARSE_FALLBACK:-true}
       MINERU_COMMAND: ${MINERU_COMMAND:-mineru}
       MINERU_BACKEND: ${MINERU_BACKEND:-pipeline}
       MINERU_LANGUAGE: ${MINERU_LANGUAGE:-}
       MINERU_TIMEOUT_SECONDS: ${MINERU_TIMEOUT_SECONDS:-600}
+      MINERU_API_URL: ${MINERU_API_URL:-}
       QDRANT_URL: http://qdrant:6333
     depends_on:
       - qdrant

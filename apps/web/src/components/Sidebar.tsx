@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotes } from '../contexts/NotesContext';
 import NoteList from './NoteList';
+import ThemeToggle from './ThemeToggle';
 
 export default function Sidebar() {
   const { user, logout } = useAuth();
@@ -39,6 +40,7 @@ export default function Sidebar() {
       </div>
 
       <div className="sidebar-bottom">
+        <ThemeToggle />
         <div className="user-info">
           <div className="user-avatar">
             {user?.displayName?.charAt(0)?.toUpperCase() ?? '?'}

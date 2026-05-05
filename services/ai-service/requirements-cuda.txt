@@ -1,0 +1,9 @@
+fastapi>=0.115.0,<0.116.0
+uvicorn[standard]==0.27.1
+pydantic>=2.7.4,<3.0.0
+python-multipart==0.0.20
+httpx==0.27.0
+markdown==3.6
+gradio==5.50.0
+pygments==2.19.2
+mineru[core,vllm]==3.1.4
