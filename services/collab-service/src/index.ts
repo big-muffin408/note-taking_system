@@ -29,7 +29,11 @@ const mongoUrl = process.env.MONGO_URL ?? 'mongodb://localhost:27017';
 const dbName = process.env.MONGO_DB ?? 'notes';
 const persistDebounceMs = Number(process.env.COLLAB_PERSIST_DEBOUNCE_MS ?? 1000);
 const userServiceUrl = process.env.USER_SERVICE_URL ?? 'http://localhost:3001';
-const jwtSecret = process.env.JWT_SECRET ?? 'dev-jwt-secret-change-in-production';
+const jwtSecret = process.env.JWT_SECRET ?? '';
+if (!jwtSecret) {
+  console.error('FATAL: JWT_SECRET environment variable is not set');
+  process.exit(1);
+}
 
 let mongoClient: MongoClient | null = null;
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -38,7 +42,10 @@ const documentLoadPromises = new Map<string, Promise<YTypes.Doc>>();
 const versionSnapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const documentLoadedAt = new WeakMap<YTypes.Doc, Date>();
 
-app.use(cors());
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : ['http://localhost', 'http://localhost:5173', 'http://localhost:80'];
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 
 async function getDb() {
@@ -189,18 +196,19 @@ async function saveVersionSnapshot(documentId: string, ydoc: YTypes.Doc) {
       createdAt: new Date(),
     });
 
-    // Retention: keep only the latest 50 versions per document
+    // Retention: keep only the latest 50 versions per document (atomic)
     const count = await db.collection('versions').countDocuments({ documentId });
     if (count > 50) {
-      const old = await db
+      const idsToDelete = await db
         .collection('versions')
         .find({ documentId })
         .sort({ createdAt: 1 })
         .limit(count - 50)
+        .project({ _id: 1 })
         .toArray();
-      if (old.length > 0) {
+      if (idsToDelete.length > 0) {
         await db.collection('versions').deleteMany({
-          _id: { $in: old.map((v) => v._id) },
+          _id: { $in: idsToDelete.map((v) => v._id) },
         });
       }
     }
@@ -267,7 +275,10 @@ async function checkDocumentAccess(userId: string, documentId: string): Promise<
     if (doc.ownerId === userId) return true;
 
     // Check share via user-service
-    const res = await fetch(`${userServiceUrl}/internal/check-access?userId=${encodeURIComponent(userId)}&documentId=${encodeURIComponent(documentId)}`);
+    const internalHeaders: Record<string, string> = {};
+    const internalSecret = process.env.INTERNAL_SERVICE_SECRET ?? '';
+    if (internalSecret) internalHeaders['X-Internal-Secret'] = internalSecret;
+    const res = await fetch(`${userServiceUrl}/internal/check-access?userId=${encodeURIComponent(userId)}&documentId=${encodeURIComponent(documentId)}`, { headers: internalHeaders });
     if (!res.ok) return false;
     const data = await res.json() as { access: string };
     return data.access === 'read' || data.access === 'write';
@@ -334,16 +345,20 @@ wss.on('connection', async (socket, request) => {
       process.nextTick(() => {
         const conns = (ydoc as YTypes.Doc & { conns?: Map<unknown, unknown> }).conns;
         if ((conns?.size ?? 0) === 0) {
-          flushDocument(documentId, ydoc).catch((error) => {
-            console.error(`Failed to flush collaborative document ${documentId}:`, error);
-          }).finally(() => {
-            docs.delete(documentId);
-            loadedDocuments.delete(documentId);
-            documentLoadPromises.delete(documentId);
-          });
           // Save a version snapshot on last disconnect and stop the timer
           saveVersionSnapshot(documentId, ydoc).catch(() => {});
           clearVersionSnapshotTimer(documentId);
+
+          // Flush pending changes, then clean up all in-memory state
+          flushDocument(documentId, ydoc)
+            .catch((error) => {
+              console.error(`Failed to flush collaborative document ${documentId}:`, error);
+            })
+            .finally(() => {
+              docs.delete(documentId);
+              loadedDocuments.delete(documentId);
+              documentLoadPromises.delete(documentId);
+            });
         }
       });
     });

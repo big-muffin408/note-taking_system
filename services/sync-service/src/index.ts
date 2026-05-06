@@ -8,7 +8,11 @@ const app = express();
 const port = Number(process.env.PORT ?? 3005);
 const mongoUrl = process.env.MONGO_URL ?? 'mongodb://localhost:27017';
 const dbName = process.env.MONGO_DB ?? 'notes';
-const jwtSecret = process.env.JWT_SECRET ?? 'dev-jwt-secret-change-in-production';
+const jwtSecret = process.env.JWT_SECRET ?? '';
+if (!jwtSecret) {
+  console.error('FATAL: JWT_SECRET environment variable is not set');
+  process.exit(1);
+}
 const userServiceUrl = process.env.USER_SERVICE_URL ?? 'http://localhost:3001';
 
 let mongoClient: MongoClient | null = null;
@@ -67,15 +71,19 @@ function serializeNote(note: Record<string, unknown>) {
 
 function hasConflict(serverUpdatedAt: unknown, baseUpdatedAt: unknown) {
   if (typeof baseUpdatedAt !== 'string' || !(serverUpdatedAt instanceof Date)) {
-    return false;
+    // Cannot determine conflict — conservatively assume conflict to prevent data loss
+    return typeof baseUpdatedAt === 'string';
   }
 
   const baseDate = new Date(baseUpdatedAt);
-  if (Number.isNaN(baseDate.getTime())) return false;
+  if (Number.isNaN(baseDate.getTime())) return true; // malformed baseUpdatedAt = conflict
   return serverUpdatedAt.toISOString() !== baseDate.toISOString();
 }
 
-app.use(cors());
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : ['http://localhost', 'http://localhost:5173', 'http://localhost:80'];
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_req, res) => {
@@ -90,6 +98,9 @@ app.get('/pull', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const db = await getDb();
     const since = typeof req.query.since === 'string' ? new Date(req.query.since) : null;
+
+    // Capture cursor BEFORE the query to avoid missing documents updated between query and response
+    const cursor = new Date().toISOString();
 
     // Own notes
     const ownQuery: Record<string, unknown> = { ownerId: req.userId };
@@ -130,7 +141,7 @@ app.get('/pull', authMiddleware, async (req: AuthRequest, res) => {
     allNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
     res.json({
-      cursor: new Date().toISOString(),
+      cursor,
       notes: allNotes.map(serializeNote),
     });
   } catch (error) {

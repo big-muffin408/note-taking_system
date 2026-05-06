@@ -1,7 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
+import Image from '@tiptap/extension-image';
+import Mathematics from '@tiptap/extension-mathematics';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 import type * as Y from 'yjs';
@@ -27,6 +29,10 @@ interface EditorProps {
   onSelectionChange?: (text: string) => void;
   /** Extra controls rendered at the right end of the toolbar (e.g. polish button). */
   floatingToolbar?: React.ReactNode;
+  /** Increment this to force the editor to re-read the content prop (e.g. after version restore). */
+  contentKey?: number;
+  /** Called when the user selects an image file. Should upload and return the image URL. */
+  onImageUpload?: (file: File) => Promise<string>;
 }
 
 function hasMeaningfulContent(content: string) {
@@ -34,9 +40,10 @@ function hasMeaningfulContent(content: string) {
   return compact.length > 0 || /<(h[1-6]|ul|ol|li|blockquote|pre|img|hr)\b/i.test(content);
 }
 
-export default function Editor({ content, onUpdate, editable = true, insertRequest, collaboration, onSelectionChange, floatingToolbar }: EditorProps) {
+export default function Editor({ content, onUpdate, editable = true, insertRequest, collaboration, onSelectionChange, floatingToolbar, contentKey, onImageUpload }: EditorProps) {
   const initialized = useRef(false);
   const lastInsertRequest = useRef<number | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const editor = useEditor({
     extensions: [
@@ -46,6 +53,14 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
         history: collaboration ? false : undefined,
       }),
       Placeholder.configure({ placeholder: '开始编写笔记…' }),
+      Image.configure({ inline: false, allowBase64: true }),
+      Mathematics.configure({
+        regex: /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g,
+        katexOptions: {
+          throwOnError: false,
+          displayMode: false,
+        },
+      }),
       ...(collaboration
         ? [
             Collaboration.configure({
@@ -71,6 +86,23 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
     },
   }, [collaboration?.document, collaboration?.provider]);
 
+  const handleImageFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !onImageUpload || !editor) return;
+    e.target.value = '';
+    try {
+      const url = await onImageUpload(file);
+      editor.chain().focus().setImage({ src: url }).run();
+    } catch (err) {
+      console.error('Image upload failed:', err);
+    }
+  }, [onImageUpload, editor]);
+
+  const insertMathBlock = useCallback(() => {
+    if (!editor) return;
+    editor.chain().focus().insertContent('$$\n\n$$').run();
+  }, [editor]);
+
   // Update content when prop changes (e.g. loading from server)
   useEffect(() => {
     if (!editor || collaboration) return;
@@ -80,6 +112,16 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
       initialized.current = true;
     }
   }, [editor, content, collaboration]);
+
+  // Reset initialization when contentKey changes (e.g. after version restore)
+  useEffect(() => {
+    if (contentKey !== undefined && editor) {
+      initialized.current = false;
+      editor.commands.setContent(content);
+      initialized.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentKey]);
 
   // Seed a brand-new collaborative Yjs document from the existing HTML once.
   useEffect(() => {
@@ -240,6 +282,33 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
             ↷
           </button>
         </div>
+
+        <div className="toolbar-divider" />
+
+        <div className="toolbar-group">
+          <button
+            type="button"
+            onClick={() => imageInputRef.current?.click()}
+            title="插入图片"
+          >
+            🖼
+          </button>
+          <button
+            type="button"
+            onClick={insertMathBlock}
+            title="插入数学公式"
+          >
+            ∑
+          </button>
+        </div>
+
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={handleImageFileChange}
+        />
       </div>
 
       {floatingToolbar && (

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
@@ -169,10 +169,12 @@ export default function EditorPage() {
   const [showPolishModal, setShowPolishModal] = useState(false);
 
   const [insertRequest, setInsertRequest] = useState<{ id: number; html: string } | null>(null);
+  const [contentKey, setContentKey] = useState(0);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
 
   const contentRef = useRef('');
+  const titleRef = useRef('');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const streamAbortRef = useRef<AbortController | null>(null);
   const collabSyncedRef = useRef(false);
@@ -189,6 +191,7 @@ export default function EditorPage() {
         const localNote = cachedToDetail(cached);
         setNote(localNote);
         setTitle(localNote.title);
+        titleRef.current = localNote.title;
         contentRef.current = localNote.content;
         setLoading(false);
       }
@@ -210,6 +213,7 @@ export default function EditorPage() {
         };
         setNote(detail);
         setTitle(detail.title);
+        titleRef.current = detail.title;
         contentRef.current = detail.content;
         await upsertLocalNote(detailToCached(detail, user!.id));
       } catch (err) {
@@ -324,16 +328,17 @@ export default function EditorPage() {
     };
   }, [id, online, token, user?.displayName, user?.email, user?.id]);
 
-  // Save to server
+  // Save to server — uses titleRef to avoid re-creating on every keystroke
   const saveToServer = useCallback(async () => {
     if (!id || !token || !user || !note) return;
     setSaving(true);
+    const currentTitle = titleRef.current;
     const now = new Date().toISOString();
     const isCollabActive = collaboration != null;
     const localNote: OfflineNote = {
       id,
       userId: user.id,
-      title,
+      title: currentTitle,
       content: contentRef.current,
       createdAt: note.createdAt ?? note.updatedAt ?? now,
       updatedAt: note.updatedAt ?? now,
@@ -354,7 +359,7 @@ export default function EditorPage() {
           return;
         }
         try {
-          await api.put(`/api/doc/notes/${id}`, { title }, token);
+          await api.put(`/api/doc/notes/${id}`, { title: currentTitle }, token);
           setLastSaved(new Date().toLocaleTimeString());
         } catch (titleErr) {
           console.error('Title save failed during collab:', titleErr);
@@ -370,7 +375,7 @@ export default function EditorPage() {
           userId: user.id,
           noteId: id,
           type: id.startsWith('local-') ? 'create' : 'update',
-          title,
+          title: currentTitle,
           content: contentRef.current,
           createdAt: localNote.createdAt,
           baseUpdatedAt: localNote.baseUpdatedAt,
@@ -382,7 +387,7 @@ export default function EditorPage() {
       }
 
       const saved = await api.put<NoteDetail>(`/api/doc/notes/${id}`, {
-        title,
+        title: currentTitle,
         content: contentRef.current,
         baseUpdatedAt: localNote.baseUpdatedAt,
       }, token);
@@ -430,7 +435,7 @@ export default function EditorPage() {
           userId: user.id,
           noteId: id,
           type: id.startsWith('local-') ? 'create' : 'update',
-          title,
+          title: currentTitle,
           content: contentRef.current,
           createdAt: localNote.createdAt,
           baseUpdatedAt: localNote.baseUpdatedAt,
@@ -444,7 +449,7 @@ export default function EditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [collaboration, fetchNotes, id, note, syncNow, title, token, upsertLocalNote, user]);
+  }, [collaboration, fetchNotes, id, note, syncNow, token, upsertLocalNote, user]);
 
   // Debounced auto-save (3 seconds after last edit)
   const scheduleSave = useCallback(() => {
@@ -470,8 +475,17 @@ export default function EditorPage() {
   // Handle title change
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTitle(e.target.value);
+    titleRef.current = e.target.value;
     scheduleSave();
   };
+
+  const handleImageUpload = useCallback(async (file: File): Promise<string> => {
+    if (!token) throw new Error('未登录');
+    const form = new FormData();
+    form.append('file', file);
+    const result = await api.postForm<{ url: string }>('/api/doc/images/upload', form, token);
+    return result.url;
+  }, [token]);
 
   const handlePdfUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -502,7 +516,7 @@ export default function EditorPage() {
     }
   };
 
-  const runSummary = async () => {
+  const runSummary = useCallback(async () => {
     if (!id) return;
     cancelStream();
     setAiLoading('summary');
@@ -534,9 +548,9 @@ export default function EditorPage() {
       },
       abort.signal,
     );
-  };
+  }, [id, note?.sourcePdfId]);
 
-  const runChat = async () => {
+  const runChat = useCallback(async () => {
     if (!id || !aiQuestion.trim()) return;
     cancelStream();
     setAiLoading('chat');
@@ -568,9 +582,9 @@ export default function EditorPage() {
       },
       abort.signal,
     );
-  };
+  }, [id, note?.sourcePdfId, aiQuestion]);
 
-  const runPolish = async () => {
+  const runPolish = useCallback(async () => {
     if (!selectedText.trim()) return;
     cancelStream();
     setAiLoading('polish');
@@ -602,7 +616,7 @@ export default function EditorPage() {
       },
       abort.signal,
     );
-  };
+  }, [selectedText]);
 
   const applyPolishResult = (replaceSelection: boolean) => {
     const text = polishResult || polishStreaming;
@@ -641,6 +655,7 @@ export default function EditorPage() {
       const detail = cachedToDetail(next);
       setNote(detail);
       setTitle(detail.title);
+      titleRef.current = detail.title;
       contentRef.current = detail.content;
     }
   };
@@ -658,12 +673,12 @@ export default function EditorPage() {
     (result: { content: string; title: string; restoredYjs?: boolean }) => {
       contentRef.current = result.content;
       setTitle(result.title);
+      titleRef.current = result.title;
       setNote((prev) => (prev ? { ...prev, content: result.content, title: result.title } : prev));
       fetchNotes();
 
-      // The collaborative editor keeps its Yjs document in memory. Reload after a
-      // restore so the provider reconnects against the restored persisted state.
-      window.setTimeout(() => window.location.reload(), 50);
+      // Increment contentKey to force Editor to re-initialize with restored content
+      setContentKey((k) => k + 1);
     },
     [fetchNotes],
   );
@@ -691,7 +706,7 @@ export default function EditorPage() {
   }, []);
 
   // The floating polish toolbar shown when text is selected
-  const polishToolbar = selectedText ? (
+  const polishToolbar = useMemo(() => selectedText ? (
     <button
       id="btn-polish-selection"
       type="button"
@@ -706,7 +721,19 @@ export default function EditorPage() {
         '✦ 润色'
       )}
     </button>
-  ) : null;
+  ) : null, [selectedText, aiLoading, runPolish]);
+
+  // Stable collaboration object for Editor — avoids new reference every render
+  const stableCollab = useMemo(() => {
+    if (!collaboration || !user) return undefined;
+    return {
+      ...collaboration,
+      user: {
+        name: user.displayName ?? user.email ?? '协作者',
+        color: getUserColor(user.id ?? token ?? 'guest'),
+      },
+    };
+  }, [collaboration, user?.displayName, user?.email, user?.id, token]);
 
   if (loading) {
     return (
@@ -879,17 +906,9 @@ export default function EditorPage() {
         insertRequest={insertRequest}
         onSelectionChange={setSelectedText}
         floatingToolbar={polishToolbar}
-        collaboration={
-          collaboration
-            ? {
-                ...collaboration,
-                user: {
-                  name: user?.displayName ?? user?.email ?? '协作者',
-                  color: getUserColor(user?.id ?? token ?? 'guest'),
-                },
-              }
-            : undefined
-        }
+        collaboration={stableCollab}
+        contentKey={contentKey}
+        onImageUpload={handleImageUpload}
       />
 
       {/* Version History */}

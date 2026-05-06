@@ -28,6 +28,7 @@ const serverPublicUrl = process.env.SERVER_PUBLIC_URL ?? appBaseUrl;
 const googleRedirectUri =
   process.env.GOOGLE_REDIRECT_URI ?? `${serverPublicUrl}/api/user/google/callback`;
 const googleStateCookie = 'notes_google_oauth_state';
+const internalServiceSecret = process.env.INTERNAL_SERVICE_SECRET ?? '';
 const verificationCodeTtlMinutes = Number(process.env.EMAIL_VERIFICATION_TTL_MINUTES ?? 10);
 const verificationSendCooldownSeconds = Number(process.env.EMAIL_VERIFICATION_COOLDOWN_SECONDS ?? 60);
 const smtpHost = process.env.SMTP_HOST;
@@ -45,7 +46,10 @@ interface GoogleUserInfo {
   given_name?: string;
 }
 
-app.use(cors());
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : ['http://localhost', 'http://localhost:5173', 'http://localhost:80'];
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
 
 function readCookie(cookieHeader: string | undefined, name: string) {
@@ -75,9 +79,17 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function sanitizeDisplayName(name: string): string {
+  return name.replace(/[<>&"']/g, '').trim().slice(0, 50);
+}
+
 function hashVerificationCode(email: string, code: string) {
   return createHash('sha256')
-    .update(`${normalizeEmail(email)}:${code}:${process.env.JWT_SECRET ?? 'dev-jwt-secret-change-in-production'}`)
+    .update(`${normalizeEmail(email)}:${code}:${process.env.JWT_SECRET}`)
     .digest('hex');
 }
 
@@ -180,6 +192,10 @@ app.post('/verification-code', async (req, res) => {
       return res.status(400).json({ error: '请输入邮箱' });
     }
 
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: '邮箱格式不正确' });
+    }
+
     if (!hasMailConfig()) {
       return res.status(503).json({ error: '邮件服务尚未配置' });
     }
@@ -226,11 +242,20 @@ app.post('/verification-code', async (req, res) => {
 
 app.post('/register', async (req, res) => {
   try {
-    const { displayName, password, verificationCode } = req.body ?? {};
+    const { password, verificationCode } = req.body ?? {};
     const email = normalizeEmail(typeof req.body?.email === 'string' ? req.body.email : '');
+    const displayName = typeof req.body?.displayName === 'string' ? sanitizeDisplayName(req.body.displayName) : '';
 
     if (!email || !password || !displayName || !verificationCode) {
       return res.status(400).json({ error: '请填写所有必填字段（email, displayName, password, verificationCode）' });
+    }
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: '邮箱格式不正确' });
+    }
+
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ error: '密码长度不能少于 8 位' });
     }
 
     const [existing] = await pool.query(
@@ -549,6 +574,10 @@ app.put('/admin/users/:id/role', authMiddleware, adminMiddleware, async (req: Au
       return res.status(400).json({ error: '无效的角色' });
     }
 
+    if (req.params.id === req.userId) {
+      return res.status(400).json({ error: '不能修改自己的角色' });
+    }
+
     await pool.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.id]);
 
     await auditLog(req.userId!, 'admin_change_role', req.params.id, { newRole: role });
@@ -621,8 +650,11 @@ app.post('/shares', authMiddleware, async (req: AuthRequest, res) => {
 
     // Verify the current user owns the document
     try {
+      const ownershipHeaders: Record<string, string> = {};
+      if (internalServiceSecret) ownershipHeaders['X-Internal-Secret'] = internalServiceSecret;
       const ownershipRes = await fetch(
-        `${documentServiceUrl}/internal/check-ownership?userId=${encodeURIComponent(req.userId!)}&documentId=${encodeURIComponent(documentId)}`
+        `${documentServiceUrl}/internal/check-ownership?userId=${encodeURIComponent(req.userId!)}&documentId=${encodeURIComponent(documentId)}`,
+        { headers: ownershipHeaders }
       );
       if (!ownershipRes.ok) {
         return res.status(502).json({ error: '无法验证文档所有权' });
@@ -734,9 +766,18 @@ app.delete('/shares/:id', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+function requireInternalAuth(req: express.Request, res: express.Response): boolean {
+  if (!internalServiceSecret) return true; // no secret configured = open (dev mode)
+  const secret = req.headers['x-internal-secret'];
+  if (secret === internalServiceSecret) return true;
+  res.status(403).json({ error: 'Forbidden: invalid internal service credentials' });
+  return false;
+}
+
 // Internal: check access permission for a user on a document
 // Used by document-service and collab-service
 app.get('/internal/check-access', async (req, res) => {
+  if (!requireInternalAuth(req, res)) return;
   try {
     const userId = typeof req.query.userId === 'string' ? req.query.userId : '';
     const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : '';

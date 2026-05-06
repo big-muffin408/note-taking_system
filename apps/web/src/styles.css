@@ -41,7 +41,7 @@
   --color-polish-title: #7c3aed;
   --color-polish-divider: #a78bfa;
   --color-overlay: rgba(15, 23, 42, 0.45);
-  --focus-ring: rgba(79, 70, 229, 0.12);
+  --focus-ring: rgba(79, 70, 229, 0.35);
 
   /* Spacing */
   --sidebar-width: 272px;
@@ -61,7 +61,7 @@
 }
 
 :root[data-theme="dark"] {
-  --color-primary: #818cf8;
+  --color-primary: #93a0fd;
   --color-primary-hover: #a5b4fc;
   --color-primary-light: rgba(129, 140, 248, 0.16);
   --color-primary-soft-border: rgba(129, 140, 248, 0.34);
@@ -96,7 +96,7 @@
   --color-polish-title: #c4b5fd;
   --color-polish-divider: #a78bfa;
   --color-overlay: rgba(2, 6, 23, 0.72);
-  --focus-ring: rgba(129, 140, 248, 0.22);
+  --focus-ring: rgba(129, 140, 248, 0.4);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.32);
@@ -364,6 +364,36 @@ a:hover {
 /* ============================================
    Sidebar
    ============================================ */
+
+.sidebar-hamburger {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 98;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  cursor: pointer;
+  color: var(--color-text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.sidebar-close {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-close:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
 
 .sidebar {
   background: var(--color-surface);
@@ -706,6 +736,93 @@ a:hover {
 .note-item-delete:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.note-list-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 0.8rem;
+}
+
+.note-list-error-dismiss {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.sidebar-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 0.8rem;
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.confirm-dialog {
+  background: var(--color-bg-card);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 360px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.confirm-dialog p {
+  margin: 0 0 20px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1.2rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition);
+  background: var(--color-error);
+  color: #fff;
+}
+
+.btn-danger:hover {
+  opacity: 0.9;
 }
 
 /* ============================================
@@ -1202,6 +1319,57 @@ a:hover {
   font-weight: 700;
 }
 
+/* Image */
+.editor-content .tiptap img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  margin: 0.5em 0;
+}
+
+.editor-content .tiptap img.ProseMirror-selectednode {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Mathematics (KaTeX) */
+.editor-content .tiptap .Tiptap-mathematics-editor {
+  background: var(--color-code-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.9em;
+}
+
+.editor-content .tiptap .Tiptap-mathematics-render {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition);
+}
+
+.editor-content .tiptap .Tiptap-mathematics-render:hover {
+  background: var(--color-code-bg);
+}
+
+.editor-content .tiptap .Tiptap-mathematics--editable .Tiptap-mathematics-render {
+  display: none;
+}
+
+.editor-content .tiptap .Tiptap-mathematics--editable .Tiptap-mathematics-editor {
+  display: block;
+}
+
+.editor-content .tiptap .Tiptap-mathematics:not(.Tiptap-mathematics--editable) .Tiptap-mathematics-render {
+  display: inline-block;
+}
+
+.editor-content .tiptap .Tiptap-mathematics:not(.Tiptap-mathematics--editable) .Tiptap-mathematics-editor {
+  display: none;
+}
+
 .collaboration-cursor__caret {
   border-left: 2px solid;
   border-right: 2px solid;
@@ -1235,11 +1403,42 @@ a:hover {
     grid-template-columns: 1fr;
   }
 
+  .sidebar-hamburger {
+    display: flex;
+  }
+
   .sidebar {
-    height: auto;
-    position: relative;
-    border-right: none;
-    border-bottom: 1px solid var(--color-border);
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(300px, 85vw);
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    border-right: 1px solid var(--color-border);
+    height: 100%;
+    background: var(--color-bg-card);
+  }
+
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 99;
+  }
+
+  .sidebar-close {
+    display: flex;
+    margin-left: auto;
+  }
+
+  .sidebar-brand {
+    width: 100%;
   }
 
   .editor-header {
@@ -2106,5 +2305,36 @@ a:hover {
   .admin-table {
     display: block;
     overflow-x: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 480px) {
+  html {
+    font-size: 14px;
+  }
+
+  .editor-toolbar {
+    padding: 6px 12px;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .editor-content {
+    padding: 16px 12px;
+  }
+
+  .ai-workbench {
+    padding: 8px 12px;
   }
 }

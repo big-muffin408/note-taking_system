@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { NavLink, useNavigate, useParams } from 'react-router-dom';
 import { useNotes, type NoteSummary } from '../contexts/NotesContext';
 
@@ -7,20 +8,13 @@ export default function NoteList() {
   const navigate = useNavigate();
   const { id: activeNoteId } = useParams<{ id: string }>();
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
+  const [confirmNote, setConfirmNote] = React.useState<NoteSummary | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
-  async function handleDelete(
-    event: React.MouseEvent<HTMLButtonElement>,
-    note: NoteSummary
-  ) {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const title = note.title || '未命名笔记';
-    if (!window.confirm(`确定删除「${title}」吗？此操作无法撤销。`)) {
-      return;
-    }
-
+  async function handleDelete(note: NoteSummary) {
+    setConfirmNote(null);
     setDeletingId(note.id);
+    setError(null);
     try {
       await deleteNote(note.id);
       if (activeNoteId === note.id) {
@@ -28,7 +22,7 @@ export default function NoteList() {
       }
     } catch (err) {
       console.error('Failed to delete note:', err);
-      window.alert(err instanceof Error ? err.message : '删除笔记失败');
+      setError(err instanceof Error ? err.message : '删除笔记失败');
     } finally {
       setDeletingId(null);
     }
@@ -44,6 +38,12 @@ export default function NoteList() {
 
   return (
     <nav className="note-list" aria-label="笔记列表">
+      {error && (
+        <div className="note-list-error" role="alert">
+          {error}
+          <button type="button" className="note-list-error-dismiss" onClick={() => setError(null)}>×</button>
+        </div>
+      )}
       {notes.map((note) => (
         <div className="note-item-row" key={note.id}>
           <NavLink
@@ -68,7 +68,7 @@ export default function NoteList() {
           <button
             type="button"
             className="note-item-delete"
-            onClick={(event) => handleDelete(event, note)}
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); setConfirmNote(note); }}
             disabled={deletingId === note.id}
             aria-label={`删除 ${note.title || '未命名笔记'}`}
             title="删除笔记"
@@ -77,6 +77,19 @@ export default function NoteList() {
           </button>
         </div>
       ))}
+
+      {confirmNote && createPortal(
+        <div className="confirm-overlay" onClick={() => setConfirmNote(null)}>
+          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <p>确定删除「{confirmNote.title || '未命名笔记'}」吗？此操作无法撤销。</p>
+            <div className="confirm-actions">
+              <button type="button" className="btn-secondary" onClick={() => setConfirmNote(null)}>取消</button>
+              <button type="button" className="btn-danger" onClick={() => handleDelete(confirmNote)}>删除</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </nav>
   );
 }

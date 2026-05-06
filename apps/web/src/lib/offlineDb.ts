@@ -63,7 +63,10 @@ function openDb() {
     };
 
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => {
+      dbPromise = null; // Clear cached promise so next call retries
+      reject(request.error);
+    };
   });
 
   return dbPromise;

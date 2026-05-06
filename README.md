@@ -1,76 +1,115 @@
 # 基于 AI 增强的协作式文档笔记系统
 
-这是按 `docs/开发任务书.md` 与 `docs/开发计划书.md` 搭建的可运行 monorepo。当前已完成**第一次迭代**核心功能，并进入**第二迭代**：用户认证、TipTap 编辑器、笔记 CRUD、Yjs WebSocket 协同编辑、PDF 轻量解析、AI 摘要与 RAG 问答主链路已经可用。
+这是一个按 `docs/开发任务书.md` 与 `docs/开发计划书.md` 演进的可运行 monorepo。当前项目已经从基础骨架进入可演示产品阶段：邮箱验证码注册、Google 登录、富文本笔记、多人协同、PDF 解析成可编辑笔记、AI 摘要/问答/润色、离线同步、版本历史、分享权限和管理后台都已经接入现有前后端链路。
 
-## 已完成功能
+## 当前进展
 
-### 第一次迭代
-- ✅ 用户注册 / 登录（JWT + bcrypt + MySQL，支持 Google 登录）
-- ✅ TipTap 富文本编辑器（Markdown 快捷键、工具栏）
-- ✅ 笔记 CRUD（MongoDB 持久化）
-- ✅ 前端多页面路由（React Router）
-- ✅ 自动保存（防抖 3 秒 + Ctrl+S 手动保存）
-- ✅ 前端路由保护（登录态校验）
+### 已接入主流程
 
-### 第二次迭代（当前）
-- ✅ 多人实时协同编辑（Yjs + TipTap Collaboration + WebSocket）
-- ✅ 协同光标与在线人数状态
-- ✅ 协同服务健康检查（文档数、连接数）
-- ✅ 协同状态轻量持久化（MongoDB `document_updates`）
-- ✅ PDF 上传与高质量解析（优先 MinerU，缺少本地 MinerU 命令时回退 PyMuPDF，原文件写入 MinIO）
-- ✅ PDF 解析后自动生成可编辑笔记
-- ✅ AI 摘要与 RAG 问答可演示链路（Qdrant 检索 + mock/deepseek/openai provider）
+- 用户认证：邮箱验证码注册、密码登录、Google OAuth 登录、JWT 登录态、失败登录锁定、用户角色。
+- 笔记编辑：React + TipTap 富文本编辑器、Markdown 快捷输入、自动保存、标题/正文分离保存。
+- 实时协同：Yjs + WebSocket，同文档多人编辑、协同光标、在线人数、MongoDB 持久化 Yjs update。
+- PDF 到笔记：上传 PDF 后写入 MinIO，调用 AI 服务解析，生成可编辑笔记，并将分块内容索引到 Qdrant。
+- AI 能力：摘要、RAG 问答、选中文本润色，前端支持 SSE 流式输出；默认 `AI_PROVIDER=mock` 可离线演示。
+- 离线编辑：IndexedDB 本地缓存、离线创建/编辑/删除、恢复在线后同步、基于 `baseUpdatedAt` 的冲突提示与处理。
+- 版本历史：协同服务自动快照，文档服务支持手动快照、版本列表、预览和恢复。
+- 分享权限：按邮箱邀请协作者，支持只读/可编辑权限；共享笔记会出现在被分享者列表中。
+- 管理后台：管理员可查看用户、调整角色，并查看主要服务健康状态。
 
-### 待开发
-- ⬜ 离线编辑模式（IndexedDB + 同步）
-- ⬜ 复杂分享权限与协作者邀请
+### 仍可继续完善
 
-## 目录结构
+- 更细的协作者体验：邀请通知、分享入口提示、只读编辑器态。
+- 生产化安全：强制配置内部服务密钥、生产级 JWT/SMTP/OAuth 配置、审计日志查询页面。
+- PDF 高质量解析体验：MinerU 首次构建、模型缓存、解析进度和失败重试 UI。
+- 自动化测试：核心接口、离线冲突、分享权限和版本恢复还需要更系统的测试覆盖。
+
+## 技术栈
 
 ```text
-apps/web                    React + Vite + TypeScript 前端
-services/user-service       用户服务（JWT + MySQL）
-services/document-service   文档服务（MongoDB CRUD）
-services/collab-service     协同 WebSocket 服务（Yjs 同步 + MongoDB update 持久化）
-services/sync-service       离线同步服务
-services/ai-service         Python FastAPI AI 服务
-infra/nginx                 Nginx 反向代理配置
-infra/database              数据库初始化脚本
+apps/web                    React + Vite + TypeScript + TipTap
+services/user-service       用户、OAuth、分享、管理后台 API（MySQL）
+services/document-service   笔记、PDF、版本历史 API（MongoDB + MinIO）
+services/collab-service     Yjs WebSocket 协同服务（MongoDB 持久化）
+services/sync-service       离线同步服务（MongoDB）
+services/ai-service         FastAPI AI 服务（PDF 解析、摘要、润色、RAG）
+infra/nginx                 统一网关
+infra/database              MySQL / MongoDB 初始化脚本
 ```
 
-## 本地启动
+基础设施：
 
-### 1. 启动数据库
+- MySQL：用户、分享、验证码、审计基础表。
+- MongoDB：笔记、PDF 元数据、Yjs update、版本快照。
+- Redis：协同/服务扩展预留。
+- Qdrant：PDF/文档分块向量检索。
+- MinIO：PDF 原文件对象存储。
 
-需要先启动 MySQL、MongoDB、Redis：
+## 快速启动
+
+### Docker 完整启动
+
+推荐用 detached 模式启动，这样命令返回后服务仍会保持运行：
 
 ```bash
-docker compose up -d mysql mongodb redis
+cp .env.example .env
+docker compose up -d --build
+docker compose ps
 ```
 
-### 2. 安装依赖
+访问入口：
+
+- 前端与网关：http://localhost
+- MinIO 控制台：http://localhost:9001
+- Qdrant：http://localhost:6333
+
+默认 `AI_PROVIDER=mock`，没有外部 API Key 也能演示摘要、问答和润色。默认 `PDF_PARSE_PROVIDER=mineru`，如果没有配置 `MINERU_API_URL` 且镜像内没有 `mineru` 命令，会自动回退到 PyMuPDF 文本解析。
+
+常用健康检查：
+
+```bash
+docker compose exec -T nginx wget -S -qO- --header 'Host: localhost' http://127.0.0.1/api/user/health
+docker compose exec -T nginx wget -S -qO- --header 'Host: localhost' http://127.0.0.1/api/doc/health
+docker compose exec -T nginx wget -S -qO- --header 'Host: localhost' http://127.0.0.1/api/ai/health
+docker compose exec -T nginx wget -S -qO- --header 'Host: localhost' http://127.0.0.1/api/sync/health
+```
+
+> 说明：在部分本地沙箱环境里，宿主机直接 `curl localhost` 可能被代理或端口隔离影响。容器内通过 nginx 验证更可靠。
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+### 本地开发启动
+
+1. 启动基础设施：
+
+```bash
+docker compose up -d mysql mongodb redis qdrant minio
+```
+
+2. 安装依赖：
 
 ```bash
 npm install
 ```
 
-### 3. 启动前端和 Node 微服务
+3. 启动前端和 Node 服务：
 
 ```bash
 npm run dev
 ```
 
-`npm run dev` 会同时启动：
+`npm run dev` 会启动：
 
-- 前端 Web：http://localhost:5173
-- 用户服务：http://localhost:3001
-- 文档服务：http://localhost:3002
-- 协同 WebSocket 服务：http://localhost:3004
-- 同步服务：http://localhost:3005
+- Web：http://localhost:5173
+- user-service：http://localhost:3001
+- document-service：http://localhost:3002
+- collab-service：http://localhost:3004
+- sync-service：http://localhost:3005
 
-### 4. 启动 AI 服务（可选）
-
-AI 服务使用 Python FastAPI，需要单独启动：
+4. 单独启动 AI 服务：
 
 ```bash
 conda env create -f services/ai-service/environment.yml
@@ -79,67 +118,35 @@ python -m pip install -r services/ai-service/requirements.txt
 python -m uvicorn app.main:app --app-dir services/ai-service --host 0.0.0.0 --port 3003 --reload
 ```
 
-### 5. 使用系统
-
-启动完成后，访问前端：
+开发模式前端入口是：
 
 ```text
 http://localhost:5173
 ```
 
-1. 注册一个新账号
-2. 登录后进入主界面
-3. 点击「新建笔记」创建笔记
-4. 在编辑器中编写内容（支持 Markdown 快捷键）
-5. 标题会通过 HTTP 保存；正文会通过 Yjs WebSocket 协同同步
+## MinerU 高质量 PDF 解析
 
-### 6. 验证多人协同
-
-1. 打开两个浏览器窗口，登录同一账号或两个账号
-2. 在两个窗口中打开同一篇笔记
-3. 在窗口 A 输入内容，窗口 B 应实时显示
-4. 在窗口 B 修改同一段内容，窗口 A 应同步更新
-5. 刷新页面后，协同正文应从 MongoDB 持久化状态恢复
-
-协同服务健康检查：
-
-```bash
-curl http://localhost:3004/health
-```
-
-返回内容会包含：
-
-```json
-{
-  "service": "collab-service",
-  "status": "ok",
-  "documents": 0,
-  "connections": 0
-}
-```
-
-## Docker 完整启动
-
-普通 Docker 启动：
+普通 `docker compose up -d --build` 不会额外启动 MinerU API 容器。需要版面、公式、表格还原时，可以在 Linux + NVIDIA Docker 环境使用 MinerU 组合配置：
 
 ```bash
 cp .env.example .env
-docker compose up --build
+npm run docker:up:mineru
 ```
 
-该命令不会额外启动 MinerU API 容器；未提供 `MINERU_API_URL` 且镜像内没有 `mineru` 命令时，PDF 上传会自动回退到 PyMuPDF 文本解析。PyMuPDF 适合轻量文本提取；如果需要更高质量的版面、公式和表格还原，请使用下面的 Linux CUDA 启动方式。
-
-### Linux + CUDA 服务器启动 MinerU
-
-适用于已安装 NVIDIA 驱动和 Docker GPU runtime 的 Linux 服务器。该模式会额外启动本地 `mineru-api` 容器，`ai-service` 通过内网地址 `http://mineru-api:8000` 调用 MinerU，不会调用外部云端 MinerU API。
-
-1. 准备环境变量：
+等价命令：
 
 ```bash
-cp .env.example .env
+docker compose -f docker-compose.yml -f docker-compose.mineru.yml up --build
 ```
 
-`.env.example` 已按 8GB 显存本机演示给出保守默认值：
+启动前建议确认 GPU 可用：
+
+```bash
+nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
+```
+
+`.env.example` 已给出本机演示的保守默认值：
 
 ```env
 PDF_PARSE_PROVIDER=mineru
@@ -151,132 +158,151 @@ NVIDIA_VISIBLE_DEVICES=all
 NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ```
 
-2. 确认宿主机和 Docker 容器都能看到 GPU：
-
-```bash
-nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
-```
-
-3. 启动完整服务和本地 MinerU API：
-
-```bash
-npm run docker:up:mineru
-```
-
-等价 Docker Compose 命令：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.mineru.yml up --build
-```
-
-首次构建 `mineru-api` 会比较慢，这是 MinerU 官方镜像依赖和模型环境本身较大导致的；后续会复用 `mineru-cache` volume 和 Docker 构建缓存。
-
-如果构建 `ai-service` 或 `mineru-api` 时在 `apt-get install` 处遇到 `502 Bad Gateway`，通常是默认软件源或代理网络临时不可用。项目镜像已经配置 apt 重试；如果重试仍失败，可以换用更近的镜像源重新构建。
-
-`ai-service` 使用 Debian 源，例如：
-
-```bash
-docker compose build \
-  --build-arg APT_MIRROR=http://mirrors.aliyun.com/debian ai-service
-docker compose up --build
-```
-
-`mineru-api` 使用 Ubuntu 源，例如：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.mineru.yml build \
-  --build-arg APT_MIRROR=http://mirrors.aliyun.com/ubuntu mineru-api
-npm run docker:up:mineru
-```
-
-4. 启动后确认解析链路已经切到 MinerU API：
+启动后确认链路：
 
 ```bash
 docker compose ps
 docker compose exec -T ai-service env | grep MINERU
-docker compose exec -T ai-service which mineru
 ```
 
-预期结果：`docker compose ps` 能看到 `mineru-api`；`ai-service` 环境里应有 `MINERU_API_URL=http://mineru-api:8000`；`which mineru` 可以为空，这是正常的，因为 MinerU 大依赖运行在独立 `mineru-api` 容器里。上传 PDF 后，返回的 `parser` 应为 `mineru-api`，不应是 `pymupdf`。
+使用 `docker-compose.mineru.yml` 时，`ai-service` 会通过 `MINERU_API_URL=http://mineru-api:8000` 调用独立 MinerU API。上传 PDF 后返回的 `parser` 应为 `mineru-api`；如果是 `pymupdf`，说明当前走的是轻量回退链路。
 
-访问入口：
+如果构建时 `apt-get install` 遇到临时 `502 Bad Gateway`，可以使用镜像源重新构建：
 
-- 前端与网关：http://localhost
-- MinIO 控制台：http://localhost:9001
-- Qdrant：http://localhost:6333
+```bash
+docker compose build --build-arg APT_MIRROR=http://mirrors.aliyun.com/debian ai-service
+docker compose -f docker-compose.yml -f docker-compose.mineru.yml build --build-arg APT_MIRROR=http://mirrors.aliyun.com/ubuntu mineru-api
+```
+
+## 使用流程
+
+1. 打开 `http://localhost` 或开发模式的 `http://localhost:5173`。
+2. 注册账号。邮箱验证码需要配置 SMTP；未配置 SMTP 时，验证码发送接口会返回配置错误。
+3. 登录后新建笔记，使用编辑器编写内容。
+4. 打开两个浏览器窗口进入同一篇笔记，验证协同编辑和在线人数。
+5. 上传 PDF，系统会解析并创建一篇可编辑笔记。
+6. 在编辑页使用摘要、问答、选中文本润色。
+7. 点击分享邀请其他用户，并选择只读或可编辑权限。
+8. 点击版本历史查看快照并恢复。
+9. 管理员账号可访问 `/admin` 查看用户和服务状态。
 
 ## 网关路由
 
-- `/` -> 前端 Web
-- `/api/user` -> 用户服务
-- `/api/doc` -> 文档服务
-- `/api/ai` -> AI 服务
-- `/api/sync` -> 离线同步服务
-- `/ws` -> 协同服务
+| 路径 | 转发目标 |
+|------|----------|
+| `/` | Web 前端 |
+| `/api/user` | user-service |
+| `/api/doc` | document-service |
+| `/api/ai` | ai-service |
+| `/api/sync` | sync-service |
+| `/ws` | collab-service |
 
-## API 接口
+## API 概览
 
-### 用户服务 `/api/user`
-
-| 方法 | 路径 | 描述 | 认证 |
-|------|------|------|------|
-| GET | /health | 健康检查 | 否 |
-| POST | /verification-code | 发送注册邮箱验证码 | 否 |
-| POST | /register | 用户注册（需邮箱验证码） | 否 |
-| POST | /login | 用户登录 | 否 |
-| GET | /google | 发起 Google OAuth 登录 | 否 |
-| GET | /google/callback | Google OAuth 回调 | 否 |
-| GET | /me | 获取当前用户信息 | 是 |
-
-### 文档服务 `/api/doc`
+### 用户与分享 `/api/user`
 
 | 方法 | 路径 | 描述 | 认证 |
 |------|------|------|------|
-| GET | /health | 健康检查 | 否 |
-| GET | /notes | 获取笔记列表 | 是 |
-| GET | /notes/:id | 获取单篇笔记 | 是 |
-| POST | /notes | 创建笔记 | 是 |
-| PUT | /notes/:id | 更新笔记 | 是 |
-| DELETE | /notes/:id | 删除笔记 | 是 |
-| POST | /pdf/upload | PDF 上传、轻量解析并创建笔记 | 是 |
+| GET | `/health` | 健康检查 | 否 |
+| POST | `/verification-code` | 发送注册邮箱验证码 | 否 |
+| POST | `/register` | 用户注册 | 否 |
+| POST | `/login` | 用户登录 | 否 |
+| GET | `/google` | 发起 Google OAuth 登录 | 否 |
+| GET | `/google/callback` | Google OAuth 回调 | 否 |
+| GET | `/me` | 获取当前用户 | 是 |
+| POST | `/shares` | 分享文档给指定邮箱 | 是 |
+| GET | `/shares?documentId=...` | 查看某篇文档的分享列表 | 是 |
+| GET | `/shares/shared-with-me` | 查看分享给我的文档 | 是 |
+| DELETE | `/shares/:id` | 撤销分享 | 是 |
+| GET | `/admin/users` | 管理员查看用户列表 | 管理员 |
+| PUT | `/admin/users/:id/role` | 管理员修改用户角色 | 管理员 |
+| GET | `/admin/system-status` | 管理员查看服务状态 | 管理员 |
 
-### AI 服务 `/api/ai`
-
-| 方法 | 路径 | 描述 | 认证 |
-|------|------|------|------|
-| GET | /health | 健康检查 | 否 |
-| POST | /summary | 基于文本或笔记上下文生成摘要 | 否 |
-| POST | /polish | 文本润色 | 否 |
-| POST | /chat | 基于 Qdrant 检索的 RAG 问答 | 否 |
-
-### 同步服务 `/api/sync`
+### 文档 `/api/doc`
 
 | 方法 | 路径 | 描述 | 认证 |
 |------|------|------|------|
-| GET | /health | 健康检查 | 否 |
-| GET | /pull | 拉取当前用户笔记，可带 `since` 增量游标 | 是 |
-| POST | /push | 推送离线队列中的 create / update / delete 变更 | 是 |
+| GET | `/health` | 健康检查 | 否 |
+| GET | `/notes` | 获取自己的笔记和分享给自己的笔记 | 是 |
+| GET | `/notes/:id` | 获取单篇笔记 | 是 |
+| POST | `/notes` | 创建笔记 | 是 |
+| PUT | `/notes/:id` | 更新笔记，支持 `baseUpdatedAt` 冲突检测 | 是 |
+| DELETE | `/notes/:id` | 删除笔记 | 是 |
+| POST | `/pdf/upload` | 上传 PDF、解析、创建笔记、写入 MinIO/Qdrant | 是 |
+| POST | `/notes/:id/versions` | 创建版本快照 | 是 |
+| GET | `/notes/:id/versions` | 查看版本列表 | 是 |
+| GET | `/notes/:id/versions/:versionId` | 查看版本详情 | 是 |
+| POST | `/notes/:id/versions/:versionId/restore` | 恢复版本 | 是 |
 
-`/api/sync/push` 使用 `baseUpdatedAt` 判断冲突：如果客户端基于的版本早于服务器当前版本，会返回 `conflict` 和 `serverNote`，前端会保留本地草稿并提示用户选择“保留本地草稿”或“使用服务器版本”。
+### AI `/api/ai`
+
+| 方法 | 路径 | 描述 | 认证 |
+|------|------|------|------|
+| GET | `/health` | 健康检查，返回 provider/model/MinerU 配置 | 否 |
+| POST | `/pdf/parse` | 解析 PDF 并索引分块 | 服务内部 |
+| POST | `/documents/index` | 索引文档内容到 Qdrant | 服务内部 |
+| POST | `/summary` | 文本/笔记摘要，支持 `?stream=true` | 否 |
+| POST | `/polish` | 文本润色，支持 `?stream=true` | 否 |
+| POST | `/chat` | 基于 Qdrant 检索的 RAG 问答，支持 `?stream=true` | 否 |
+
+### 同步 `/api/sync`
+
+| 方法 | 路径 | 描述 | 认证 |
+|------|------|------|------|
+| GET | `/health` | 健康检查 | 否 |
+| GET | `/pull?since=...` | 拉取当前用户笔记和共享笔记，可增量 | 是 |
+| POST | `/push` | 推送离线 create/update/delete 队列 | 是 |
+
+`/api/sync/push` 使用 `baseUpdatedAt` 判断冲突。如果客户端基于的版本早于服务器当前版本，会返回 `conflict` 和 `serverNote`，前端会保留本地草稿并提示用户选择“保留本地草稿”或“使用服务器版本”。
 
 ### 协同服务
 
 | 协议 | 路径 | 描述 |
 |------|------|------|
-| HTTP | /health | 健康检查，返回文档数与连接数 |
-| WebSocket | /ws/collab/:documentId | Yjs 协同编辑通道 |
+| HTTP | `/health` | 返回文档数、连接数和时间戳 |
+| WebSocket | `/ws/collab/:documentId` | Yjs 协同编辑通道 |
 
-协同正文不会再依赖文档服务的 3 秒自动保存。文档服务仍负责笔记标题、列表、创建、删除等 CRUD；协同服务负责正文实时同步，并将 Yjs update 写入 MongoDB 的 `document_updates` 集合。
+协同连接会校验 JWT，并检查用户是否为文档所有者或被分享者。协同正文不会依赖文档服务的 3 秒自动保存；文档服务负责笔记标题、列表、创建、删除、PDF 和版本 API，协同服务负责正文实时同步和 Yjs update 持久化。
+
+## 环境变量
+
+参见 `.env.example`。常用变量：
+
+| 变量 | 说明 |
+|------|------|
+| `JWT_SECRET` | JWT 签名密钥，生产环境必须修改 |
+| `INTERNAL_SERVICE_SECRET` | 内部服务间访问校验密钥 |
+| `AI_SERVICE_SECRET` | document-service 调用 ai-service 的可选 Bearer 密钥 |
+| `ALLOWED_ORIGINS` | CORS 白名单，逗号分隔 |
+| `APP_BASE_URL` | 前端访问地址，用于 OAuth 成功后跳回前端 |
+| `SERVER_PUBLIC_URL` | 网关外部地址，用于生成 OAuth 回调 |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth 配置 |
+| `GOOGLE_REDIRECT_URI` | Google OAuth 回调，Docker 默认 `http://localhost/api/user/google/callback` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `MAIL_FROM` | 邮箱验证码发信配置 |
+| `AI_PROVIDER` | `mock` / `openai` / `deepseek` / `xiaomi` |
+| `AI_API_KEY` / `AI_MODEL` / `AI_BASE_URL` | OpenAI-compatible 模型配置 |
+| `PDF_PARSE_PROVIDER` | `mineru` 或 `pymupdf` |
+| `MINERU_API_URL` | 外部或 compose 内 MinerU API 地址 |
+| `MINERU_MODEL_SOURCE` | MinerU 模型来源，默认 `modelscope` |
+| `MINIO_BUCKET` | PDF 原文件存储桶 |
+
+Google OAuth 常用本地配置：
+
+- `npm run dev`：来源 `http://localhost:5173`，回调 `http://localhost:5173/api/user/google/callback`
+- Docker/Nginx：来源 `http://localhost`，回调 `http://localhost/api/user/google/callback`
 
 ## 开发检查
 
 ```bash
 npm run build
-npm audit --offline
+python -m compileall services/ai-service/app
 ```
 
-当前构建已覆盖前端、用户服务、文档服务、协同服务和同步服务的 TypeScript 编译。
+可选安全检查：
+
+```bash
+npm audit --offline
+```
 
 ## 离线编辑验收流程
 
@@ -284,25 +310,11 @@ npm audit --offline
 2. 在浏览器 DevTools 中切到 Offline，新建笔记并编辑正文，侧边栏应显示“待同步”，编辑页应显示“离线编辑 / 待同步”。
 3. 恢复 Online，点击侧边栏“同步”或等待自动同步，本地 `local-*` 路由应自动跳转到服务端真实笔记 ID，状态变为“已同步”。
 4. 再次切到 Offline，编辑已有笔记或删除笔记；恢复 Online 后，修改或删除应同步到 MongoDB。
-5. 用两个窗口打开同一篇笔记，在窗口 A 保存后，窗口 B 基于旧版本保存应进入“有冲突”状态；分别验证“保留本地草稿”和“使用服务器版本”都能恢复到“已同步”。
+5. 用两个窗口打开同一篇笔记，在窗口 A 保存后，窗口 B 基于旧版本保存应进入“有冲突”状态。
+6. 分别验证“保留本地草稿”和“使用服务器版本”都能恢复到“已同步”。
 
-## 环境变量
+## 当前代码分析摘要
 
-参见 `.env.example`，关键变量：
+这次更新后，项目已经不是单纯的“PDF/AI 第二迭代”状态，而是补上了偏产品化的第三层能力：离线编辑、分享权限、版本历史和管理后台。前端 `EditorPage` 现在承担了协同、离线、PDF、流式 AI、版本恢复、分享弹窗等复合工作流；后端也从简单 CRUD 扩展成 user/document/collab/sync/ai 多服务协作。
 
-- `JWT_SECRET`：JWT 签名密钥（生产环境务必修改）
-- `APP_BASE_URL`：前端访问地址，用于 Google 登录成功后跳回前端
-- `SERVER_PUBLIC_URL`：网关外部访问地址，用于生成 Google OAuth 回调地址
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`：Google OAuth 客户端配置
-- `GOOGLE_REDIRECT_URI`：Google OAuth 回调地址，默认 `http://localhost/api/user/google/callback`
-- `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `MAIL_FROM`：注册邮箱验证码的 SMTP 发信配置
-- `EMAIL_VERIFICATION_TTL_MINUTES`：验证码有效期，默认 10 分钟
-- `EMAIL_VERIFICATION_COOLDOWN_SECONDS`：同一邮箱发送间隔，默认 60 秒
-- `AI_PROVIDER`：AI 服务提供者（mock / openai / deepseek / xiaomi）
-- `AI_API_KEY`：AI API 密钥
-- `AI_MODEL`：模型名称；`xiaomi` 默认 `mimo-v2.5-pro`
-- `AI_BASE_URL`：自定义 OpenAI-compatible base URL；`xiaomi` 默认 `https://token-plan-cn.xiaomimimo.com/v1`
-- `PDF_PARSE_PROVIDER`：PDF 解析器，默认 `mineru`；也可设为 `pymupdf` 强制使用轻量文本解析。默认 `mineru` 在没有 `MINERU_API_URL` 且找不到 `MINERU_COMMAND` 时会回退到 PyMuPDF
-- `MINERU_BACKEND`：MinerU 后端，默认 `pipeline`，适合 CPU 环境
-- `MINERU_API_URL`：外部 MinerU FastAPI 地址；使用 `docker-compose.mineru.yml` 时会自动设为 `http://mineru-api:8000`
-- `MINERU_MODEL_SOURCE`：MinerU 模型来源，默认 `modelscope`
+下一步最值得做的是补验证：先把当前 README 中的启动和健康检查跑通，再围绕分享权限、离线冲突、版本恢复、PDF 解析回退和流式 AI 写一组端到端 smoke。这样项目会从“功能都接上了”进入“每次更新都不容易散架”的阶段。

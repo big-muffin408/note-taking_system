@@ -1,10 +1,12 @@
+import asyncio
+import base64
 import hashlib
 import html
 import json
 import math
+import mimetypes
 import re
 import shutil
-import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -13,7 +15,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +29,42 @@ try:
 except ImportError:
     fitz = None
 
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in getenv("ALLOWED_ORIGINS", "http://localhost,http://localhost:5173,http://localhost:80").split(",")
+    if o.strip()
+]
+
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="AI Service", version="0.3.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+AI_SERVICE_SECRET = getenv("AI_SERVICE_SECRET", "")
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB
+
+# Reusable async HTTP client (created once, reused across requests)
+_http_client: httpx.AsyncClient | None = None
+
+
+def get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=60, trust_env=False)
+    return _http_client
+
+
+@app.on_event("shutdown")
+async def shutdown_http_client():
+    global _http_client
+    if _http_client and not _http_client.is_closed:
+        await _http_client.aclose()
 
 VECTOR_SIZE = 128
 QDRANT_COLLECTION = getenv("QDRANT_COLLECTION", "note_chunks")
@@ -64,6 +101,16 @@ class IndexRequest(BaseModel):
     document_id: Optional[str] = Field(default=None, alias="documentId")
     note_id: Optional[str] = Field(default=None, alias="noteId")
     source_name: str = Field(default="note", alias="sourceName")
+
+
+def verify_service_auth(request: Request) -> None:
+    """Verify that the request comes from an authorized internal service."""
+    if not AI_SERVICE_SECRET:
+        return  # No secret configured = open access (dev mode)
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer ") and auth_header[7:] == AI_SERVICE_SECRET:
+        return
+    raise HTTPException(status_code=403, detail="Unauthorized: invalid service credentials")
 
 
 def now_iso() -> str:
@@ -112,7 +159,7 @@ def markdown_to_html(markdown: str) -> str:
         try:
             return markdown_lib.markdown(
                 markdown,
-                extensions=["extra", "sane_lists", "nl2br"],
+                extensions=["extra", "sane_lists"],
                 output_format="html5",
             )
         except Exception:
@@ -296,9 +343,104 @@ def count_pages_from_mineru_output(output_dir: Path) -> int:
     return 0
 
 
-def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
+def is_supported_image_path(path: Path) -> bool:
+    return path.suffix.lower() in {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".tif",
+        ".tiff",
+        ".svg",
+    }
+
+
+def make_image_asset(path: str, data: bytes) -> dict[str, Any]:
+    mime_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return {
+        "path": path.replace("\\", "/"),
+        "mimeType": mime_type,
+        "dataBase64": base64.b64encode(data).decode("ascii"),
+    }
+
+
+def collect_mineru_image_assets(output_dir: Path, markdown_path: Path) -> list[dict[str, Any]]:
+    assets: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    search_roots = [markdown_path.parent, output_dir]
+
+    for root in search_roots:
+        for image_path in root.rglob("*"):
+            if not image_path.is_file() or not is_supported_image_path(image_path):
+                continue
+
+            relative_to_markdown = image_path.relative_to(markdown_path.parent).as_posix()
+            if relative_to_markdown in seen:
+                continue
+
+            seen.add(relative_to_markdown)
+            assets.append(make_image_asset(relative_to_markdown, image_path.read_bytes()))
+
+    return assets
+
+
+def decode_mineru_image_value(value: Any) -> bytes | None:
+    if isinstance(value, bytes):
+        return value
+    if not isinstance(value, str) or not value:
+        return None
+
+    _, _, candidate = value.partition(",") if value.startswith("data:") else ("", "", value)
+    try:
+        return base64.b64decode(candidate, validate=True)
+    except Exception:
+        return None
+
+
+def extract_mineru_api_image_assets(value: Any) -> list[dict[str, Any]]:
+    assets: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_asset(path: str, image_value: Any) -> None:
+        normalized_path = path.replace("\\", "/").lstrip("./")
+        if not normalized_path or normalized_path in seen:
+            return
+        image_bytes = decode_mineru_image_value(image_value)
+        if image_bytes is None:
+            return
+        seen.add(normalized_path)
+        assets.append(make_image_asset(normalized_path, image_bytes))
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key in ("images", "image", "imgs"):
+                candidate = node.get(key)
+                if isinstance(candidate, dict):
+                    for path, image_value in candidate.items():
+                        add_asset(str(path), image_value)
+                elif isinstance(candidate, list):
+                    for item in candidate:
+                        if isinstance(item, dict):
+                            path = item.get("path") or item.get("name") or item.get("filename") or item.get("img_path")
+                            image_value = item.get("data") or item.get("base64") or item.get("image") or item.get("content")
+                            if path and image_value:
+                                add_asset(str(path), image_value)
+
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return assets
+
+
+async def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
     if MINERU_API_URL:
-        return parse_pdf_with_mineru_api(data, filename)
+        return await parse_pdf_with_mineru_api(data, filename)
 
     if not shutil.which(MINERU_COMMAND):
         return parse_pdf_with_pymupdf(data, filename)
@@ -326,32 +468,40 @@ def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
         if MINERU_LANGUAGE:
             command.extend(["-l", MINERU_LANGUAGE])
 
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=MINERU_TIMEOUT_SECONDS,
-            check=False,
+        proc = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=MINERU_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError("MinerU parse timed out")
 
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip()
+        if proc.returncode != 0:
+            detail = (stderr.decode() or stdout.decode() or "").strip()
             raise RuntimeError(f"MinerU parse failed: {detail[:2000]}")
 
         markdown_path = choose_mineru_markdown(output_path)
         markdown = markdown_path.read_text(encoding="utf-8")
         text = markdown_to_plain_text(markdown)
         pages = count_pages_from_mineru_output(output_path)
+        assets = collect_mineru_image_assets(output_path, markdown_path)
 
     return {
         "parser": "mineru",
         "pages": pages,
         "text": text,
         "markdown": markdown,
+        "assets": assets,
     }
 
 
-def parse_pdf_with_mineru_api(data: bytes, filename: str) -> dict[str, Any]:
+async def parse_pdf_with_mineru_api(data: bytes, filename: str) -> dict[str, Any]:
     file_stem = Path(filename or "document.pdf").stem
     lang = MINERU_LANGUAGE or "ch"
     form_data = {
@@ -364,25 +514,26 @@ def parse_pdf_with_mineru_api(data: bytes, filename: str) -> dict[str, Any]:
         "return_middle_json": "true",
         "return_model_output": "false",
         "return_content_list": "false",
-        "return_images": "false",
+        "return_images": "true",
         "response_format_zip": "false",
         "return_original_file": "false",
     }
 
     try:
-        with httpx.Client(timeout=MINERU_TIMEOUT_SECONDS, trust_env=False) as client:
-            response = client.post(
-                f"{MINERU_API_URL}/file_parse",
-                data=form_data,
-                files={
-                    "files": (
-                        filename or "document.pdf",
-                        data,
-                        "application/pdf",
-                    )
-                },
-            )
-            response.raise_for_status()
+        client = get_http_client()
+        response = await client.post(
+            f"{MINERU_API_URL}/file_parse",
+            data=form_data,
+            files={
+                "files": (
+                    filename or "document.pdf",
+                    data,
+                    "application/pdf",
+                )
+            },
+            timeout=MINERU_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
     except httpx.HTTPError as error:
         raise RuntimeError(f"MinerU API parse failed: {error}") from error
 
@@ -395,20 +546,25 @@ def parse_pdf_with_mineru_api(data: bytes, filename: str) -> dict[str, Any]:
     ]
     markdown = ""
     pages = 0
+    selected_candidate: dict[str, Any] | None = None
     for candidate in candidates:
         if isinstance(candidate, dict) and candidate.get("md_content"):
             markdown = candidate["md_content"]
             pages = count_pages_from_mineru_value(candidate)
+            selected_candidate = candidate
             break
 
     if not markdown:
         raise RuntimeError("MinerU API did not return md_content.")
+
+    assets = extract_mineru_api_image_assets(selected_candidate or payload)
 
     return {
         "parser": "mineru-api",
         "pages": pages or count_pages_from_mineru_value(payload),
         "text": markdown_to_plain_text(markdown),
         "markdown": markdown,
+        "assets": assets,
     }
 
 
@@ -425,23 +581,24 @@ def parse_pdf_with_pymupdf(data: bytes, filename: str) -> dict[str, Any]:
     except Exception as error:
         raise RuntimeError(f"PyMuPDF failed to open PDF: {error}") from error
 
-    markdown_parts: list[str] = []
-    text_parts: list[str] = []
-    page_count = document.page_count
-    metadata = document.metadata or {}
-    title = normalize_text(metadata.get("title") or "") or Path(filename or "PDF 笔记").stem
-    if title:
-        markdown_parts.append(f"# {title}")
+    try:
+        markdown_parts: list[str] = []
+        text_parts: list[str] = []
+        page_count = document.page_count
+        metadata = document.metadata or {}
+        title = normalize_text(metadata.get("title") or "") or Path(filename or "PDF 笔记").stem
+        if title:
+            markdown_parts.append(f"# {title}")
 
-    for page_index, page in enumerate(document, start=1):
-        page_text = normalize_text(page.get_text("text"))
-        if not page_text:
-            continue
+        for page_index, page in enumerate(document, start=1):
+            page_text = normalize_text(page.get_text("text"))
+            if not page_text:
+                continue
 
-        markdown_parts.append(f"## 第 {page_index} 页\n\n{page_text}")
-        text_parts.append(page_text)
-
-    document.close()
+            markdown_parts.append(f"## 第 {page_index} 页\n\n{page_text}")
+            text_parts.append(page_text)
+    finally:
+        document.close()
 
     text = normalize_text("\n\n".join(text_parts))
     markdown = "\n\n".join(markdown_parts).strip()
@@ -453,12 +610,13 @@ def parse_pdf_with_pymupdf(data: bytes, filename: str) -> dict[str, Any]:
         "pages": page_count,
         "text": text,
         "markdown": markdown,
+        "assets": [],
     }
 
 
-def parse_pdf_document(data: bytes, filename: str) -> dict[str, Any]:
+async def parse_pdf_document(data: bytes, filename: str) -> dict[str, Any]:
     if PDF_PARSE_PROVIDER == "mineru":
-        return parse_pdf_with_mineru(data, filename)
+        return await parse_pdf_with_mineru(data, filename)
     if PDF_PARSE_PROVIDER == "pymupdf":
         return parse_pdf_with_pymupdf(data, filename)
 
@@ -516,15 +674,25 @@ async def call_model(messages: list[dict[str, str]]) -> str:
 
     base_url = ai_base_url(provider)
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    try:
+        client = get_http_client()
         response = await client.post(
             f"{base_url}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={"model": model, "messages": messages, "temperature": 0.2},
+            timeout=30,
         )
         response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(status_code=502, detail=f"AI provider returned {error.response.status_code}") from error
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail=f"AI provider connection failed") from error
 
-    return response.json()["choices"][0]["message"]["content"]
+    try:
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as error:
+        raise HTTPException(status_code=502, detail="AI provider returned unexpected response format") from error
 
 
 async def stream_model(messages: list[dict[str, str]]) -> AsyncGenerator[str, None]:
@@ -542,12 +710,14 @@ async def stream_model(messages: list[dict[str, str]]) -> AsyncGenerator[str, No
 
     base_url = ai_base_url(provider)
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    try:
+        client = get_http_client()
         async with client.stream(
             "POST",
             f"{base_url}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={"model": model, "messages": messages, "temperature": 0.2, "stream": True},
+            timeout=60,
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -562,6 +732,12 @@ async def stream_model(messages: list[dict[str, str]]) -> AsyncGenerator[str, No
                         yield delta
                 except (KeyError, json.JSONDecodeError):
                     continue
+    except httpx.HTTPStatusError as error:
+        yield f"\n[错误: AI 服务返回 {error.response.status_code}]"
+        return
+    except httpx.HTTPError:
+        yield "\n[错误: AI 服务连接失败]"
+        return
 
 
 def make_sse_stream(
@@ -599,18 +775,22 @@ def health():
 
 @app.post("/pdf/parse")
 async def parse_pdf(
+    request: Request,
     file: UploadFile = File(...),
     document_id: Optional[str] = Form(default=None, alias="documentId"),
     note_id: Optional[str] = Form(default=None, alias="noteId"),
 ):
+    verify_service_auth(request)
     if file.content_type not in {"application/pdf", "application/octet-stream"}:
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
     data = await file.read()
     try:
-        parsed = parse_pdf_document(data, file.filename or "PDF 笔记")
-    except subprocess.TimeoutExpired as error:
-        raise HTTPException(status_code=504, detail="MinerU 解析超时") from error
+        parsed = await parse_pdf_document(data, file.filename or "PDF 笔记")
+    except RuntimeError as error:
+        if "timed out" in str(error).lower():
+            raise HTTPException(status_code=504, detail="MinerU 解析超时") from error
+        raise HTTPException(status_code=500, detail=str(error)) from error
     except HTTPException:
         raise
     except Exception as error:
@@ -639,11 +819,13 @@ async def parse_pdf(
         "markdownDraft": markdown,
         "htmlDraft": html_draft,
         "chunks": len(chunks),
+        "assets": parsed.get("assets", []),
     }
 
 
 @app.post("/documents/index")
-async def index_document(payload: IndexRequest):
+async def index_document(request: Request, payload: IndexRequest):
+    verify_service_auth(request)
     chunks = await index_chunks(
         payload.text,
         markdown=payload.markdown,
@@ -655,7 +837,8 @@ async def index_document(payload: IndexRequest):
 
 
 @app.post("/summary")
-async def summarize(payload: TextRequest, stream: bool = False):
+async def summarize(request: Request, payload: TextRequest, stream: bool = False):
+    verify_service_auth(request)
     source_text = normalize_text(payload.text)
     sources: list[dict[str, Any]] = []
     if not source_text and (payload.document_id or payload.note_id):
@@ -695,7 +878,8 @@ async def summarize(payload: TextRequest, stream: bool = False):
 
 
 @app.post("/polish")
-async def polish(payload: TextRequest, stream: bool = False):
+async def polish(request: Request, payload: TextRequest, stream: bool = False):
+    verify_service_auth(request)
     source_text = payload.text or "这里将返回润色后的文本。"
     messages = [
         {"role": "system", "content": "你是中文写作助手，请润色文本：修正语法错误、优化表达，保持原意不变。直接返回润色后的文本，不加任何说明。"},
@@ -724,7 +908,8 @@ async def polish(payload: TextRequest, stream: bool = False):
 
 
 @app.post("/chat")
-async def chat(payload: ChatRequest, stream: bool = False):
+async def chat(request: Request, payload: ChatRequest, stream: bool = False):
+    verify_service_auth(request)
     sources = await search_chunks(payload.question, payload.document_id, payload.note_id)
     context = "\n\n".join(
         f"[{index + 1}] {source['text']}" for index, source in enumerate(sources)

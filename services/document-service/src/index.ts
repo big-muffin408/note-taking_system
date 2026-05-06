@@ -1,6 +1,7 @@
 import cors from 'cors';
 import express from 'express';
 import multer from 'multer';
+import crypto from 'crypto';
 import { Client as MinioClient } from 'minio';
 import { ObjectId } from 'mongodb';
 import { getDb } from './db.js';
@@ -18,12 +19,16 @@ const minioClient = new MinioClient({
   accessKey: process.env.MINIO_ROOT_USER ?? 'minioadmin',
   secretKey: process.env.MINIO_ROOT_PASSWORD ?? 'minioadmin'
 });
+const internalServiceSecret = process.env.INTERNAL_SERVICE_SECRET ?? '';
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }
 });
 
-app.use(cors());
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : ['http://localhost', 'http://localhost:5173', 'http://localhost:80'];
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 
 interface PdfParseResponse {
@@ -37,6 +42,11 @@ interface PdfParseResponse {
   text: string;
   markdownDraft: string;
   htmlDraft?: string;
+  assets?: Array<{
+    path: string;
+    mimeType: string;
+    dataBase64: string;
+  }>;
   chunks: number;
 }
 
@@ -58,7 +68,9 @@ async function auditLog(userId: string, action: string, targetId?: string, metad
 
 async function checkShareAccess(userId: string, documentId: string): Promise<'none' | 'read' | 'write'> {
   try {
-    const res = await fetch(`${userServiceUrl}/internal/check-access?userId=${encodeURIComponent(userId)}&documentId=${encodeURIComponent(documentId)}`);
+    const headers: Record<string, string> = {};
+    if (internalServiceSecret) headers['X-Internal-Secret'] = internalServiceSecret;
+    const res = await fetch(`${userServiceUrl}/internal/check-access?userId=${encodeURIComponent(userId)}&documentId=${encodeURIComponent(documentId)}`, { headers });
     if (!res.ok) return 'none';
     const data = await res.json() as { access: string };
     if (data.access === 'write') return 'write';
@@ -83,6 +95,35 @@ function sanitizeObjectSegment(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
+function sanitizeAssetPath(value: string) {
+  return value
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment) => sanitizeObjectSegment(segment).replace(/^_+$/, 'asset'))
+    .filter(Boolean)
+    .join('/');
+}
+
+function normalizeAssetRef(value: string) {
+  const trimmed = value.trim().replace(/^['"]|['"]$/g, '');
+  const withoutFragment = trimmed.split('#')[0].split('?')[0];
+  try {
+    return decodeURIComponent(withoutFragment);
+  } catch {
+    return withoutFragment;
+  }
+}
+
+function imageRefKeys(path: string) {
+  const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '');
+  const fileName = normalized.split('/').pop() ?? normalized;
+  return [normalized, `./${normalized}`, fileName];
+}
+
+function isExternalImageRef(value: string) {
+  return /^(https?:|data:|blob:|\/api\/doc\/images\/)/i.test(value.trim());
+}
+
 async function ensureMinioBucket() {
   const exists = await minioClient.bucketExists(minioBucket).catch((error) => {
     if ((error as { code?: string }).code === 'NoSuchBucket') return false;
@@ -105,6 +146,71 @@ async function putPdfObject(objectName: string, file: Express.Multer.File) {
   );
 }
 
+async function putExtractedPdfAssets(
+  userId: string,
+  pdfId: ObjectId,
+  assets: PdfParseResponse['assets'] = []
+) {
+  await ensureMinioBucket();
+
+  const refToUrl = new Map<string, string>();
+  const storedAssets: Array<{ sourcePath: string; objectName: string; url: string; mimeType: string; bytes: number }> = [];
+
+  for (const asset of assets) {
+    if (!asset.path || !asset.dataBase64) continue;
+
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(asset.dataBase64, 'base64');
+    } catch {
+      continue;
+    }
+
+    if (!buffer.length) continue;
+
+    const objectName = `${userId}/pdf-assets/${pdfId.toHexString()}/${sanitizeAssetPath(asset.path)}`;
+    const mimeType = asset.mimeType || 'application/octet-stream';
+
+    await minioClient.putObject(
+      minioBucket,
+      objectName,
+      buffer,
+      buffer.length,
+      { 'Content-Type': mimeType }
+    );
+
+    const url = `/api/doc/images/${encodeURIComponent(objectName)}`;
+    for (const key of imageRefKeys(asset.path)) {
+      refToUrl.set(key, url);
+    }
+    storedAssets.push({ sourcePath: asset.path, objectName, url, mimeType, bytes: buffer.length });
+  }
+
+  return { refToUrl, storedAssets };
+}
+
+function resolveExtractedImageUrl(refToUrl: Map<string, string>, rawRef: string) {
+  if (isExternalImageRef(rawRef)) return rawRef;
+  const normalizedRef = normalizeAssetRef(rawRef).replace(/\\/g, '/').replace(/^\.\//, '');
+  return refToUrl.get(normalizedRef) ?? refToUrl.get(`./${normalizedRef}`) ?? refToUrl.get(normalizedRef.split('/').pop() ?? normalizedRef) ?? rawRef;
+}
+
+function rewriteMarkdownImageRefs(markdown: string, refToUrl: Map<string, string>) {
+  return markdown.replace(/!\[([^\]]*)]\(([^)\s]+)(\s+['"][^'"]*['"])?\)/g, (match, alt: string, src: string, title: string = '') => {
+    const nextSrc = resolveExtractedImageUrl(refToUrl, src);
+    if (nextSrc === src) return match;
+    return `![${alt}](${nextSrc}${title})`;
+  });
+}
+
+function rewriteHtmlImageRefs(html: string, refToUrl: Map<string, string>) {
+  return html.replace(/(<img\b[^>]*\bsrc=["'])([^"']+)(["'][^>]*>)/gi, (match, before: string, src: string, after: string) => {
+    const nextSrc = resolveExtractedImageUrl(refToUrl, src);
+    if (nextSrc === src) return match;
+    return `${before}${nextSrc}${after}`;
+  });
+}
+
 async function parsePdfWithAi(
   file: Express.Multer.File,
   pdfId: ObjectId,
@@ -124,8 +230,12 @@ async function parsePdfWithAi(
     fileName
   );
 
+  const aiHeaders: Record<string, string> = {};
+  const aiServiceSecret = process.env.AI_SERVICE_SECRET ?? '';
+  if (aiServiceSecret) aiHeaders['Authorization'] = `Bearer ${aiServiceSecret}`;
   const response = await fetch(`${aiServiceUrl}/pdf/parse`, {
     method: 'POST',
+    headers: aiHeaders,
     body: form
   });
 
@@ -297,30 +407,42 @@ app.put('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
 
     const baseUpdatedAt = req.body?.baseUpdatedAt;
     const baseDate = typeof baseUpdatedAt === 'string' ? new Date(baseUpdatedAt) : null;
-    if (baseDate && !Number.isNaN(baseDate.getTime()) && new Date(existing.updatedAt).toISOString() !== baseDate.toISOString()) {
-      return res.status(409).json({
-        error: '服务器版本已更新',
-        serverNote: {
-          id: existing._id.toHexString(),
-          title: existing.title,
-          content: existing.content,
-          ownerId: existing.ownerId,
-          sourcePdfId: existing.sourcePdfId,
-          createdAt: existing.createdAt,
-          updatedAt: existing.updatedAt,
-        },
-      });
-    }
 
     const now = new Date();
     const updates: Record<string, unknown> = { updatedAt: now };
     if (req.body?.title !== undefined) updates.title = req.body.title;
     if (req.body?.content !== undefined) updates.content = req.body.content;
 
-    await db.collection('documents').updateOne(
-      { _id: objectId },
-      { $set: updates }
-    );
+    // Atomic conditional update: only succeeds if the document hasn't changed since the client read it
+    if (baseDate && !Number.isNaN(baseDate.getTime())) {
+      const result = await db.collection('documents').findOneAndUpdate(
+        { _id: objectId, updatedAt: existing.updatedAt },
+        { $set: updates },
+        { returnDocument: 'after' }
+      );
+
+      if (!result) {
+        // Document was modified between our read and write — conflict
+        const fresh = await db.collection('documents').findOne({ _id: objectId });
+        return res.status(409).json({
+          error: '服务器版本已更新',
+          serverNote: fresh ? {
+            id: fresh._id.toHexString(),
+            title: fresh.title,
+            content: fresh.content,
+            ownerId: fresh.ownerId,
+            sourcePdfId: fresh.sourcePdfId,
+            createdAt: fresh.createdAt,
+            updatedAt: fresh.updatedAt,
+          } : undefined,
+        });
+      }
+    } else {
+      await db.collection('documents').updateOne(
+        { _id: objectId },
+        { $set: updates }
+      );
+    }
 
     await auditLog(req.userId!, 'update_note', req.params.id);
 
@@ -390,6 +512,11 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       return res.status(400).json({ error: '仅支持上传 PDF 文件' });
     }
 
+    // Magic bytes validation: PDF files start with %PDF
+    if (file.buffer.length < 4 || file.buffer.subarray(0, 4).toString('ascii') !== '%PDF') {
+      return res.status(400).json({ error: '文件内容不是有效的 PDF 格式' });
+    }
+
     const db = await getDb();
     const now = new Date();
     const pdfId = new ObjectId();
@@ -399,7 +526,10 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
 
     await putPdfObject(objectName, file);
     const parsed = await parsePdfWithAi(file, pdfId, noteId, fileName);
-    const content = parsed.htmlDraft ?? parsed.markdownDraft;
+    const { refToUrl, storedAssets } = await putExtractedPdfAssets(req.userId!, pdfId, parsed.assets);
+    const markdownDraft = rewriteMarkdownImageRefs(parsed.markdownDraft, refToUrl);
+    const htmlDraft = parsed.htmlDraft ? rewriteHtmlImageRefs(parsed.htmlDraft, refToUrl) : undefined;
+    const content = htmlDraft ?? markdownDraft;
     const title = stripPdfExtension(fileName);
 
     await db.collection('documents').insertOne({
@@ -424,6 +554,7 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       parser: parsed.parser,
       wordCount: parsed.wordCount,
       chunks: parsed.chunks,
+      extractedImages: storedAssets,
       status: parsed.status,
       createdAt: now,
       updatedAt: now
@@ -439,12 +570,75 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       pages: parsed.pages,
       parser: parsed.parser,
       status: parsed.status,
-      markdownDraft: parsed.markdownDraft
+      markdownDraft
     });
   } catch (error) {
     console.error('PDF upload error:', error);
     const message = error instanceof Error ? error.message : 'PDF 上传解析失败';
     res.status(500).json({ error: message });
+  }
+});
+
+// --- Image Upload & Serve ---
+
+const IMAGE_MIME_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp', 'image/tiff',
+]);
+
+app.post('/images/upload', authMiddleware, upload.single('file'), async (req: AuthRequest, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: '请上传图片文件' });
+    }
+
+    if (!IMAGE_MIME_TYPES.has(file.mimetype)) {
+      return res.status(400).json({ error: '仅支持上传图片文件 (JPEG, PNG, GIF, WebP, SVG, BMP, TIFF)' });
+    }
+
+    const ext = file.originalname.split('.').pop() || 'bin';
+    const imageId = crypto.randomUUID();
+    const objectName = `${req.userId}/images/${imageId}.${sanitizeObjectSegment(ext)}`;
+
+    await ensureMinioBucket();
+    await minioClient.putObject(
+      minioBucket,
+      objectName,
+      file.buffer,
+      file.size,
+      { 'Content-Type': file.mimetype }
+    );
+
+    const url = `/api/doc/images/${encodeURIComponent(objectName)}`;
+
+    res.status(201).json({ url, key: objectName, fileName: file.originalname, bytes: file.size });
+  } catch (error) {
+    console.error('Image upload error:', error);
+    res.status(500).json({ error: '图片上传失败' });
+  }
+});
+
+app.get('/images/:key(*)', async (req, res) => {
+  try {
+    const objectName = req.params.key;
+    if (!objectName) {
+      return res.status(400).json({ error: '缺少图片 key' });
+    }
+
+    const stream = await minioClient.getObject(minioBucket, objectName);
+    const stat = await minioClient.statObject(minioBucket, objectName);
+
+    res.set('Content-Type', stat.metaData?.['content-type'] || 'application/octet-stream');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+
+    stream.pipe(res);
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === 'NoSuchKey' || code === 'NotFound') {
+      return res.status(404).json({ error: '图片不存在' });
+    }
+    console.error('Image serve error:', error);
+    res.status(500).json({ error: '获取图片失败' });
   }
 });
 
@@ -477,18 +671,19 @@ app.post('/notes/:id/versions', authMiddleware, async (req: AuthRequest, res) =>
 
     const result = await db.collection('versions').insertOne(version);
 
-    // Retention: keep only the latest 50 versions per document
+    // Retention: keep only the latest 50 versions per document (atomic)
     const count = await db.collection('versions').countDocuments({ documentId: req.params.id });
     if (count > 50) {
-      const old = await db
+      const idsToDelete = await db
         .collection('versions')
         .find({ documentId: req.params.id })
         .sort({ createdAt: 1 })
         .limit(count - 50)
+        .project({ _id: 1 })
         .toArray();
-      if (old.length > 0) {
+      if (idsToDelete.length > 0) {
         await db.collection('versions').deleteMany({
-          _id: { $in: old.map((v) => v._id) },
+          _id: { $in: idsToDelete.map((v) => v._id) },
         });
       }
     }
@@ -728,8 +923,17 @@ app.post('/notes/:id/versions/:versionId/restore', authMiddleware, async (req: A
   }
 });
 
+function requireInternalAuth(req: express.Request, res: express.Response): boolean {
+  if (!internalServiceSecret) return true;
+  const secret = req.headers['x-internal-secret'];
+  if (secret === internalServiceSecret) return true;
+  res.status(403).json({ error: 'Forbidden: invalid internal service credentials' });
+  return false;
+}
+
 // Internal: check if a user owns a document (used by user-service for share authorization)
 app.get('/internal/check-ownership', async (req, res) => {
+  if (!requireInternalAuth(req, res)) return;
   try {
     const userId = typeof req.query.userId === 'string' ? req.query.userId : '';
     const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : '';

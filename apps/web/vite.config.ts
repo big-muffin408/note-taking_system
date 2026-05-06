@@ -3,6 +3,23 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  build: {
+    target: 'es2020',
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-tiptap': [
+            '@tiptap/react', '@tiptap/starter-kit',
+            '@tiptap/extension-placeholder', '@tiptap/extension-collaboration',
+            '@tiptap/extension-collaboration-cursor',
+          ],
+          'vendor-yjs': ['yjs', 'y-websocket'],
+        },
+      },
+    },
+  },
   plugins: [
     react(),
     VitePWA({

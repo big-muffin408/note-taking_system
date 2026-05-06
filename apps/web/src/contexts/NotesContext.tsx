@@ -24,14 +24,43 @@ const syncChannel = typeof BroadcastChannel !== 'undefined'
   ? new BroadcastChannel('sync-channel')
   : null;
 
+const HAS_LOCKS_API = typeof navigator !== 'undefined' && 'locks' in navigator;
 const SYNC_LOCK_KEY = 'notes-sync-lock';
 const LOCK_TTL_MS = 30000;
 
-function tryAcquireSyncLock(): boolean {
+// navigator.locks-based lock (preferred, atomic)
+async function tryAcquireSyncLock(): Promise<boolean> {
+  if (HAS_LOCKS_API) {
+    try {
+      // Try to acquire a named lock; returns false if already held by another tab
+      const lock = await navigator.locks.request(SYNC_LOCK_KEY, { ifAvailable: true }, (lock) => {
+        // Hold the lock for the duration of the sync by returning a promise
+        // that resolves when we're done (caller controls via releaseSyncLock)
+        return new Promise<void>((resolve) => {
+          (window as any).__syncLockResolve = resolve;
+        });
+      });
+      return lock !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  // Fallback: localStorage lock with random jitter to reduce TOCTOU races
   try {
     const existing = localStorage.getItem(SYNC_LOCK_KEY);
     if (existing) {
       const { timestamp } = JSON.parse(existing);
+      if (Date.now() - timestamp < LOCK_TTL_MS) {
+        return false;
+      }
+    }
+    // Add small random delay to reduce concurrent write races
+    await new Promise((r) => setTimeout(r, Math.random() * 50));
+    // Re-check after delay
+    const recheck = localStorage.getItem(SYNC_LOCK_KEY);
+    if (recheck) {
+      const { timestamp } = JSON.parse(recheck);
       if (Date.now() - timestamp < LOCK_TTL_MS) {
         return false;
       }
@@ -44,6 +73,14 @@ function tryAcquireSyncLock(): boolean {
 }
 
 function releaseSyncLock(): void {
+  if (HAS_LOCKS_API) {
+    const resolve = (window as any).__syncLockResolve;
+    if (resolve) {
+      delete (window as any).__syncLockResolve;
+      resolve();
+    }
+    return;
+  }
   try {
     localStorage.removeItem(SYNC_LOCK_KEY);
   } catch {
@@ -156,6 +193,10 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       if (event.data?.type === 'sw-sync-done' || event.data?.type === 'tab-sync-done') {
         if (user) loadCachedNotes();
       }
+      if (event.data?.type === 'sw-sync-error') {
+        // Service worker sync failed — reload cached state to show pending items
+        if (user) loadCachedNotes();
+      }
     }
 
     syncChannel.addEventListener('message', handleMessage);
@@ -173,15 +214,16 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   const syncNow = useCallback(async () => {
     if (!token || !user || syncInFlightRef.current || !navigator.onLine) return;
 
-    if (!tryAcquireSyncLock()) return;
+    if (!await tryAcquireSyncLock()) return;
 
     syncInFlightRef.current = true;
     setSyncing(true);
     try {
-      await withRetry(async () => {
-        const changes = await getQueuedChanges(user.id);
-        if (changes.length > 0) {
-          const pushed = await api.post<{
+      // Push phase: send queued changes to server
+      const changes = await getQueuedChanges(user.id);
+      if (changes.length > 0) {
+        try {
+          const pushed = await withRetry(() => api.post<{
             results: Array<{
               queueId: string;
               noteId: string;
@@ -191,12 +233,12 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
               serverNote?: NoteSummary & { content: string };
               message?: string;
             }>;
-          }>('/api/sync/push', { changes }, token);
+          }>('/api/sync/push', { changes }, token), { maxAttempts: 3, baseDelayMs: 2000, maxDelayMs: 15000 });
 
-          const doneQueueIds: string[] = [];
+          // Process results incrementally — remove each succeeded item from queue immediately
           for (const result of pushed.results) {
             if (result.status === 'created' || result.status === 'updated') {
-              doneQueueIds.push(result.queueId);
+              await removeQueuedChanges([result.queueId]);
               if (result.remoteId && result.remoteId !== result.noteId) {
                 await removeCachedNote(user.id, result.noteId);
                 window.dispatchEvent(new CustomEvent('note-id-replaced', {
@@ -220,11 +262,11 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
                 });
               }
             } else if (result.status === 'deleted') {
-              doneQueueIds.push(result.queueId);
+              await removeQueuedChanges([result.queueId]);
               await removeCachedNote(user.id, result.noteId);
               await removeServerConflictCopy(user.id, result.noteId);
             } else if (result.status === 'conflict') {
-              doneQueueIds.push(result.queueId);
+              await removeQueuedChanges([result.queueId]);
               const local = (await getCachedNotes(user.id)).find((note) => note.id === result.noteId);
               if (local) {
                 await upsertCachedNote({
@@ -259,15 +301,22 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
               }
             }
           }
-          await removeQueuedChanges(doneQueueIds);
+        } catch (err) {
+          console.error('Push failed:', err);
+          // Push failed but pull may still succeed — continue
         }
+      }
 
-        const pull = await api.get<{ notes: Array<NoteSummary & { content: string }> }>('/api/sync/pull', token);
+      // Pull phase: independent try/catch
+      try {
+        const pull = await withRetry(() => api.get<{ notes: Array<NoteSummary & { content: string }> }>('/api/sync/pull', token), { maxAttempts: 3, baseDelayMs: 2000, maxDelayMs: 15000 });
         await cacheServerNotes(user.id, pull.notes);
-      }, { maxAttempts: 3, baseDelayMs: 2000, maxDelayMs: 15000 });
+      } catch (err) {
+        console.error('Pull failed:', err);
+      }
 
       await loadCachedNotes();
-      syncChannel?.postMessage({ type: 'tab-sync-done' });
+      try { syncChannel?.postMessage({ type: 'tab-sync-done' }); } catch { /* ignore */ }
     } catch (err) {
       console.error('Sync failed after retries:', err);
       await loadCachedNotes();

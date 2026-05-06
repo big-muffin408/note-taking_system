@@ -9,6 +9,45 @@ import EditorPage from './pages/EditorPage';
 import AdminPage from './pages/AdminPage';
 import MainLayout from './components/MainLayout';
 
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('Uncaught error:', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="auth-page">
+          <div className="auth-form" style={{ textAlign: 'center' }}>
+            <h2>出现了一些问题</h2>
+            <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
+              页面遇到了意外错误，请尝试刷新页面。
+            </p>
+            <button
+              className="btn-primary"
+              onClick={() => window.location.reload()}
+              style={{ width: 'auto', padding: '0.6rem 2rem' }}
+            >
+              重新加载
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 function WelcomePage() {
   return (
     <div className="welcome-page">
@@ -63,6 +102,7 @@ function GuestOnly({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <BrowserRouter>
+      <ErrorBoundary>
       <AuthProvider>
         <Routes>
           <Route
@@ -101,6 +141,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }
