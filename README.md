@@ -9,7 +9,7 @@
 - 用户认证：邮箱验证码注册、密码登录、Google OAuth 登录、JWT 登录态、失败登录锁定、用户角色。
 - 笔记编辑：React + TipTap 富文本编辑器、Markdown 快捷输入、自动保存、标题/正文分离保存。
 - 实时协同：Yjs + WebSocket，同文档多人编辑、协同光标、在线人数、MongoDB 持久化 Yjs update。
-- PDF 到笔记：上传 PDF 后写入 MinIO，调用 AI 服务解析，生成可编辑笔记，并将分块内容索引到 Qdrant。
+- PDF 到笔记：上传 PDF 后写入 MinIO，调用 AI 服务解析，生成可编辑笔记，并将分块内容索引到 Chroma。
 - AI 能力：摘要、RAG 问答、选中文本润色，前端支持 SSE 流式输出；默认 `AI_PROVIDER=mock` 可离线演示。
 - 离线编辑：IndexedDB 本地缓存、离线创建/编辑/删除、恢复在线后同步、基于 `baseUpdatedAt` 的冲突提示与处理。
 - 版本历史：协同服务自动快照，文档服务支持手动快照、版本列表、预览和恢复。
@@ -41,7 +41,7 @@ infra/database              MySQL / MongoDB 初始化脚本
 - MySQL：用户、分享、验证码、审计基础表。
 - MongoDB：笔记、PDF 元数据、Yjs update、版本快照。
 - Redis：协同/服务扩展预留。
-- Qdrant：PDF/文档分块向量检索。
+- Chroma：PDF/文档分块向量检索（AI 服务内置，持久化到 Docker volume）。
 - MinIO：PDF 原文件对象存储。
 
 ## 快速启动
@@ -60,7 +60,6 @@ docker compose ps
 
 - 前端与网关：http://localhost
 - MinIO 控制台：http://localhost:9001
-- Qdrant：http://localhost:6333
 
 默认 `AI_PROVIDER=mock`，没有外部 API Key 也能演示摘要、问答和润色。默认 `PDF_PARSE_PROVIDER=mineru`，如果没有配置 `MINERU_API_URL` 且镜像内没有 `mineru` 命令，会自动回退到 PyMuPDF 文本解析。
 
@@ -86,7 +85,7 @@ docker compose down
 1. 启动基础设施：
 
 ```bash
-docker compose up -d mysql mongodb redis qdrant minio
+docker compose up -d mysql mongodb redis minio
 ```
 
 2. 安装依赖：
@@ -228,7 +227,7 @@ docker compose -f docker-compose.yml -f docker-compose.mineru.yml build --build-
 | POST | `/notes` | 创建笔记 | 是 |
 | PUT | `/notes/:id` | 更新笔记，支持 `baseUpdatedAt` 冲突检测 | 是 |
 | DELETE | `/notes/:id` | 删除笔记 | 是 |
-| POST | `/pdf/upload` | 上传 PDF、解析、创建笔记、写入 MinIO/Qdrant | 是 |
+| POST | `/pdf/upload` | 上传 PDF、解析、创建笔记、写入 MinIO/Chroma | 是 |
 | POST | `/notes/:id/versions` | 创建版本快照 | 是 |
 | GET | `/notes/:id/versions` | 查看版本列表 | 是 |
 | GET | `/notes/:id/versions/:versionId` | 查看版本详情 | 是 |
@@ -240,10 +239,10 @@ docker compose -f docker-compose.yml -f docker-compose.mineru.yml build --build-
 |------|------|------|------|
 | GET | `/health` | 健康检查，返回 provider/model/MinerU 配置 | 否 |
 | POST | `/pdf/parse` | 解析 PDF 并索引分块 | 服务内部 |
-| POST | `/documents/index` | 索引文档内容到 Qdrant | 服务内部 |
+| POST | `/documents/index` | 索引文档内容到 Chroma | 服务内部 |
 | POST | `/summary` | 文本/笔记摘要，支持 `?stream=true` | 否 |
 | POST | `/polish` | 文本润色，支持 `?stream=true` | 否 |
-| POST | `/chat` | 基于 Qdrant 检索的 RAG 问答，支持 `?stream=true` | 否 |
+| POST | `/chat` | 基于 Chroma 检索的 RAG 问答，支持 `?stream=true` | 否 |
 
 ### 同步 `/api/sync`
 

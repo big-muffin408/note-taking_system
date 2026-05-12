@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { MongoClient, ObjectId } from 'mongodb';
 import { WebSocketServer } from 'ws';
 import type * as YTypes from 'yjs';
+import { errorHandler, notFoundHandler } from './error-handler.js';
 
 const require = createRequire(import.meta.url);
 const Y = require('yjs') as typeof import('yjs');
@@ -304,6 +305,10 @@ app.get('/health', (_req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// 错误处理中间件
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });

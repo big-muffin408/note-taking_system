@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import hashlib
@@ -8,15 +10,21 @@ import mimetypes
 import re
 import shutil
 import tempfile
-import uuid
 from datetime import datetime, timezone
 from os import getenv
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
+import chromadb
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from llama_index.core import Settings, VectorStoreIndex
+from llama_index.core.embeddings import BaseEmbedding
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.vector_stores import FilterCondition, FilterOperator, MetadataFilter, MetadataFilters
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.vector_stores.chroma import ChromaVectorStore
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
@@ -66,9 +74,13 @@ async def shutdown_http_client():
     if _http_client and not _http_client.is_closed:
         await _http_client.aclose()
 
-VECTOR_SIZE = 128
-QDRANT_COLLECTION = getenv("QDRANT_COLLECTION", "note_chunks")
-QDRANT_URL = getenv("QDRANT_URL", "http://localhost:6333").rstrip("/")
+CHROMA_PERSIST_DIR = getenv("CHROMA_PERSIST_DIR", "/app/chroma_data")
+CHROMA_COLLECTION = getenv("CHROMA_COLLECTION", "note_chunks")
+EMBEDDING_API_KEY = getenv("EMBEDDING_API_KEY", "")
+EMBEDDING_BASE_URL = getenv("EMBEDDING_BASE_URL", "").strip()
+EMBEDDING_MODEL = getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+LOCAL_EMBEDDING_MODEL = "local-hash-embedding"
+LOCAL_EMBEDDING_DIM = 384
 PDF_PARSE_PROVIDER = getenv("PDF_PARSE_PROVIDER", "mineru").lower()
 MINERU_COMMAND = getenv("MINERU_COMMAND", "mineru")
 MINERU_BACKEND = getenv("MINERU_BACKEND", "pipeline")
@@ -89,6 +101,7 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     question: str = Field(default="", description="Question for RAG chat.")
+    text: str = Field(default="", description="Direct note text for context fallback.")
     document_id: Optional[str] = Field(default=None, alias="documentId")
     note_id: Optional[str] = Field(default=None, alias="noteId")
 
@@ -179,56 +192,103 @@ def markdown_to_html(markdown: str) -> str:
     return "".join(blocks) or "<p></p>"
 
 
-def chunk_text(text: str, max_chars: int = 900) -> list[str]:
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", normalize_text(text)) if p.strip()]
-    chunks: list[str] = []
-    current = ""
-
-    for paragraph in paragraphs:
-        if len(paragraph) > max_chars:
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.extend(paragraph[i:i + max_chars] for i in range(0, len(paragraph), max_chars))
-            continue
-
-        candidate = f"{current}\n\n{paragraph}".strip()
-        if len(candidate) > max_chars and current:
-            chunks.append(current)
-            current = paragraph
-        else:
-            current = candidate
-
-    if current:
-        chunks.append(current)
-    return chunks
+_chroma_client: chromadb.PersistentClient | None = None
+_chroma_collection: chromadb.Collection | None = None
+_vector_store: ChromaVectorStore | None = None
+_index: VectorStoreIndex | None = None
+_node_parser: SentenceSplitter | None = None
 
 
-def embed_text(text: str) -> list[float]:
-    vector = [0.0] * VECTOR_SIZE
-    words = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
-    for word in words:
-        digest = hashlib.sha256(word.encode("utf-8")).digest()
-        index = int.from_bytes(digest[:2], "big") % VECTOR_SIZE
-        vector[index] += 1.0
+class LocalHashEmbedding(BaseEmbedding):
+    """Deterministic local embedding for offline/mock development."""
 
-    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
-    return [value / norm for value in vector]
+    model_name: str = LOCAL_EMBEDDING_MODEL
+
+    def _embed(self, text: str) -> list[float]:
+        vector = [0.0] * LOCAL_EMBEDDING_DIM
+        tokens = re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+        for token in tokens:
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            index = int.from_bytes(digest[:2], "big") % LOCAL_EMBEDDING_DIM
+            vector[index] += 1.0
+
+        norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+        return [value / norm for value in vector]
+
+    def _get_text_embedding(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    async def _aget_text_embedding(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def _get_query_embedding(self, query: str) -> list[float]:
+        return self._embed(query)
+
+    async def _aget_query_embedding(self, query: str) -> list[float]:
+        return self._embed(query)
 
 
-async def ensure_qdrant_collection() -> None:
-    async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
-        response = await client.get(f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}")
-        if response.status_code == 200:
-            return
-        if response.status_code != 404:
-            response.raise_for_status()
+def _get_chroma_client() -> chromadb.PersistentClient:
+    global _chroma_client
+    if _chroma_client is None:
+        _chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+    return _chroma_client
 
-        create = await client.put(
-            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}",
-            json={"vectors": {"size": VECTOR_SIZE, "distance": "Cosine"}},
-        )
-        create.raise_for_status()
+
+def _get_chroma_collection() -> chromadb.Collection:
+    global _chroma_collection
+    if _chroma_collection is None:
+        _chroma_collection = _get_chroma_client().get_or_create_collection(CHROMA_COLLECTION)
+    return _chroma_collection
+
+
+def _get_vector_store() -> ChromaVectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = ChromaVectorStore(chroma_collection=_get_chroma_collection())
+    return _vector_store
+
+
+def _get_index() -> VectorStoreIndex:
+    global _index
+    if _index is None:
+        _index = VectorStoreIndex.from_vector_store(_get_vector_store())
+    return _index
+
+
+def _get_node_parser() -> SentenceSplitter:
+    global _node_parser
+    if _node_parser is None:
+        _node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+    return _node_parser
+
+
+def _init_embedding() -> None:
+    if not EMBEDDING_API_KEY:
+        Settings.embed_model = LocalHashEmbedding()
+        return
+
+    kwargs: dict[str, Any] = {"model": EMBEDDING_MODEL}
+    kwargs["api_key"] = EMBEDDING_API_KEY
+    if EMBEDDING_BASE_URL:
+        kwargs["api_base"] = EMBEDDING_BASE_URL
+    Settings.embed_model = OpenAIEmbedding(**kwargs)
+
+
+_init_embedding()
+
+
+def _build_chroma_filter(
+    document_id: Optional[str], note_id: Optional[str]
+) -> MetadataFilters | None:
+    filters: list[MetadataFilter] = []
+    if document_id:
+        filters.append(MetadataFilter(key="documentId", value=document_id, operator=FilterOperator.EQ))
+    if note_id:
+        filters.append(MetadataFilter(key="noteId", value=note_id, operator=FilterOperator.EQ))
+    if not filters:
+        return None
+    return MetadataFilters(filters=filters, condition=FilterCondition.AND)
 
 
 async def index_chunks(
@@ -239,38 +299,36 @@ async def index_chunks(
     note_id: Optional[str] = None,
     source_name: str = "note",
 ) -> list[dict[str, Any]]:
-    chunks = chunk_text(text)
-    if not chunks:
+    normalized = normalize_text(text)
+    if not normalized:
         return []
 
-    await ensure_qdrant_collection()
-    points = []
-    for index, chunk in enumerate(chunks):
-        point_seed = f"{document_id or ''}:{note_id or ''}:{source_name}:{index}:{chunk}"
-        point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, point_seed))
-        points.append({
-            "id": point_id,
-            "vector": embed_text(chunk),
-            "payload": {
-                "documentId": document_id,
-                "noteId": note_id,
-                "sourceName": source_name,
-                "chunkIndex": index,
-                "text": chunk,
-                "markdown": markdown[:2000],
-                "indexedAt": now_iso(),
-            },
-        })
+    from llama_index.core import Document as LlamaDocument
 
-    async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-        response = await client.put(
-            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points",
-            params={"wait": "true"},
-            json={"points": points},
-        )
-        response.raise_for_status()
+    doc = LlamaDocument(
+        text=normalized,
+        metadata={
+            "documentId": document_id or "",
+            "noteId": note_id or "",
+            "sourceName": source_name,
+            "markdown": markdown[:2000],
+            "indexedAt": now_iso(),
+        },
+    )
 
-    return [{"index": i, "text": chunk} for i, chunk in enumerate(chunks)]
+    index = VectorStoreIndex.from_documents(
+        [doc],
+        vector_store=_get_vector_store(),
+        transformations=[_get_node_parser()],
+    )
+
+    # Refresh the cached index so subsequent queries see new data
+    global _index
+    _index = index
+
+    # Collect chunk texts for the response
+    nodes = _get_node_parser().get_nodes_from_documents([doc])
+    return [{"index": i, "text": node.get_content()} for i, node in enumerate(nodes)]
 
 
 def choose_mineru_markdown(output_dir: Path) -> Path:
@@ -443,7 +501,10 @@ async def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
         return await parse_pdf_with_mineru_api(data, filename)
 
     if not shutil.which(MINERU_COMMAND):
-        return parse_pdf_with_pymupdf(data, filename)
+        parsed = parse_pdf_with_pymupdf(data, filename)
+        parsed["fallbackReason"] = f"MinerU command '{MINERU_COMMAND}' was not found."
+        parsed["warnings"] = ["已回退到 PyMuPDF 文本解析，复杂版面、图片、公式和表格还原能力有限。"]
+        return parsed
 
     safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", filename or "document.pdf")
     if not safe_name.lower().endswith(".pdf"):
@@ -611,6 +672,7 @@ def parse_pdf_with_pymupdf(data: bytes, filename: str) -> dict[str, Any]:
         "text": text,
         "markdown": markdown,
         "assets": [],
+        "warnings": [],
     }
 
 
@@ -623,44 +685,25 @@ async def parse_pdf_document(data: bytes, filename: str) -> dict[str, Any]:
     raise HTTPException(status_code=400, detail="PDF_PARSE_PROVIDER must be mineru or pymupdf.")
 
 
-def qdrant_filter(document_id: Optional[str], note_id: Optional[str]) -> dict[str, Any] | None:
-    should = []
-    if document_id:
-        should.append({"key": "documentId", "match": {"value": document_id}})
-    if note_id:
-        should.append({"key": "noteId", "match": {"value": note_id}})
-    return {"should": should} if should else None
-
-
 async def search_chunks(query: str, document_id: Optional[str], note_id: Optional[str]) -> list[dict[str, Any]]:
-    await ensure_qdrant_collection()
-    body: dict[str, Any] = {
-        "vector": embed_text(query),
-        "limit": 5,
-        "with_payload": True,
-    }
-    query_filter = qdrant_filter(document_id, note_id)
-    if query_filter:
-        body["filter"] = query_filter
-
-    async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
-        response = await client.post(
-            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/search",
-            json=body,
-        )
-        response.raise_for_status()
-
-    result = response.json().get("result", [])
-    return [
-        {
-            "score": item.get("score", 0),
-            "text": item.get("payload", {}).get("text", ""),
-            "sourceName": item.get("payload", {}).get("sourceName", ""),
-            "chunkIndex": item.get("payload", {}).get("chunkIndex", 0),
-        }
-        for item in result
-        if item.get("payload", {}).get("text")
-    ]
+    chroma_filter = _build_chroma_filter(document_id, note_id)
+    retriever = _get_index().as_retriever(
+        similarity_top_k=5,
+        filters=chroma_filter if chroma_filter else None,
+    )
+    nodes = await retriever.aretrieve(query)
+    results: list[dict[str, Any]] = []
+    for rank, node_with_score in enumerate(nodes):
+        node = node_with_score.node
+        meta = node.metadata or {}
+        results.append({
+            "score": node_with_score.score if node_with_score.score is not None else 0,
+            "text": node.get_content(),
+            "textPreview": normalize_text(node.get_content())[:180],
+            "sourceName": meta.get("sourceName", ""),
+            "chunkIndex": rank,
+        })
+    return results
 
 
 async def call_model(messages: list[dict[str, str]]) -> str:
@@ -768,7 +811,8 @@ def health():
         "model": ai_model_name(provider_name()),
         "pdfParseProvider": PDF_PARSE_PROVIDER,
         "mineruBackend": MINERU_BACKEND,
-        "qdrantCollection": QDRANT_COLLECTION,
+        "chromaCollection": CHROMA_COLLECTION,
+        "embeddingModel": EMBEDDING_MODEL,
         "timestamp": now_iso(),
     }
 
@@ -820,6 +864,9 @@ async def parse_pdf(
         "htmlDraft": html_draft,
         "chunks": len(chunks),
         "assets": parsed.get("assets", []),
+        "assetCount": len(parsed.get("assets", [])),
+        "fallbackReason": parsed.get("fallbackReason"),
+        "warnings": parsed.get("warnings", []),
     }
 
 
@@ -914,6 +961,9 @@ async def chat(request: Request, payload: ChatRequest, stream: bool = False):
     context = "\n\n".join(
         f"[{index + 1}] {source['text']}" for index, source in enumerate(sources)
     )
+    if not context and payload.text:
+        context = normalize_text(payload.text)[:6000]
+    print(f"[chat] question={payload.question[:80]!r} noteId={payload.note_id!r} docId={payload.document_id!r} text_len={len(payload.text)} ctx_len={len(context)}")
     messages = [
         {"role": "system", "content": "你是 RAG 文档问答助手。请只根据给定上下文回答，不确定时说明缺少依据。"},
         {"role": "user", "content": f"问题：{payload.question}\n\n上下文：\n{context or '无可用上下文'}"},

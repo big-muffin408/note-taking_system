@@ -45,6 +45,12 @@ interface PdfUploadResponse {
   fileName: string;
   bytes: number;
   pages: number;
+  parser?: string;
+  wordCount?: number;
+  chunks?: number;
+  assetCount?: number;
+  fallbackReason?: string;
+  warnings?: string[];
   status: string;
   markdownDraft: string;
 }
@@ -54,6 +60,7 @@ interface AiChatResponse {
   sources: Array<{
     score: number;
     text: string;
+    textPreview?: string;
     sourceName: string;
     chunkIndex: number;
   }>;
@@ -153,6 +160,7 @@ export default function EditorPage() {
   const [collabStatus, setCollabStatus] = useState<CollabStatus>('connecting');
   const [collaboratorCount, setCollaboratorCount] = useState(1);
   const [uploadingPdf, setUploadingPdf] = useState(false);
+  const [lastPdfUpload, setLastPdfUpload] = useState<PdfUploadResponse | null>(null);
 
   // AI state — streaming
   const [aiLoading, setAiLoading] = useState<AiMode | null>(null);
@@ -498,6 +506,7 @@ export default function EditorPage() {
       const form = new FormData();
       form.append('file', file);
       const result = await api.postForm<PdfUploadResponse>('/api/doc/pdf/upload', form, token);
+      setLastPdfUpload(result);
       await fetchNotes();
       navigate(`/note/${result.noteId}`);
     } catch (err) {
@@ -514,6 +523,7 @@ export default function EditorPage() {
       streamAbortRef.current.abort();
       streamAbortRef.current = null;
     }
+    setAiLoading(null);
   };
 
   const runSummary = useCallback(async () => {
@@ -552,6 +562,7 @@ export default function EditorPage() {
 
   const runChat = useCallback(async () => {
     if (!id || !aiQuestion.trim()) return;
+    console.log('[runChat] text length:', contentRef.current.length, 'question:', aiQuestion.trim().slice(0, 50));
     cancelStream();
     setAiLoading('chat');
     setAiError('');
@@ -564,7 +575,7 @@ export default function EditorPage() {
 
     await streamAI(
       '/api/ai/chat',
-      { noteId: id, documentId: note?.sourcePdfId, question: aiQuestion.trim() },
+      { noteId: id, documentId: note?.sourcePdfId, question: aiQuestion.trim(), text: contentRef.current },
       {
         onMeta: (meta) => setAiSources(meta.sources ?? []),
         onChunk: (chunk) => setAiResultStreaming((prev) => prev + chunk),
@@ -705,6 +716,25 @@ export default function EditorPage() {
     };
   }, []);
 
+  // Clear AI state when switching notes
+  useEffect(() => {
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+      streamAbortRef.current = null;
+    }
+    setAiLoading(null);
+    setAiResult('');
+    setAiResultStreaming('');
+    setAiSources([]);
+    setAiError('');
+    setAiQuestion('');
+    setPolishResult('');
+    setPolishStreaming('');
+    setShowPolishModal(false);
+    setSelectedText('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   // The floating polish toolbar shown when text is selected
   const polishToolbar = useMemo(() => selectedText ? (
     <button
@@ -839,6 +869,18 @@ export default function EditorPage() {
           </button>
         </div>
 
+        {lastPdfUpload && (
+          <div className={`pdf-parse-summary${lastPdfUpload.fallbackReason ? ' pdf-parse-summary-warning' : ''}`}>
+            <span>{lastPdfUpload.parser ?? 'PDF'} · {lastPdfUpload.pages} 页</span>
+            <span>{lastPdfUpload.chunks ?? 0} chunks</span>
+            <span>{lastPdfUpload.assetCount ?? 0} 图片</span>
+            {lastPdfUpload.fallbackReason && <span>{lastPdfUpload.fallbackReason}</span>}
+            {lastPdfUpload.warnings?.slice(0, 1).map((warning) => (
+              <span key={warning}>{warning}</span>
+            ))}
+          </div>
+        )}
+
         <div className="ai-chat-control">
           <input
             type="text"
@@ -883,8 +925,12 @@ export default function EditorPage() {
                 {aiSources.length > 0 && (
                   <div className="ai-sources">
                     {aiSources.slice(0, 3).map((source) => (
-                      <span key={`${source.sourceName}-${source.chunkIndex}`}>
+                      <span
+                        key={`${source.sourceName}-${source.chunkIndex}`}
+                        title={source.textPreview || source.text}
+                      >
                         {source.sourceName || 'PDF'} #{source.chunkIndex + 1}
+                        {source.textPreview ? ` · ${source.textPreview}` : ''}
                       </span>
                     ))}
                   </div>
@@ -901,6 +947,7 @@ export default function EditorPage() {
       </section>
 
       <Editor
+        key={id}
         content={note.content}
         onUpdate={handleContentUpdate}
         insertRequest={insertRequest}

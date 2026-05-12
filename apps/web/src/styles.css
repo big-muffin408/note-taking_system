@@ -32,6 +32,9 @@
   --color-info: #2563eb;
   --color-info-bg: #eff6ff;
   --color-info-border: #bfdbfe;
+  --color-warning: #b45309;
+  --color-warning-bg: #fffbeb;
+  --color-warning-border: #fde68a;
   --color-code-bg: #f1f5f9;
   --color-code-block-bg: #1e293b;
   --color-code-block-text: #e2e8f0;
@@ -87,6 +90,9 @@
   --color-info: #93c5fd;
   --color-info-bg: rgba(59, 130, 246, 0.14);
   --color-info-border: rgba(147, 197, 253, 0.3);
+  --color-warning: #fbbf24;
+  --color-warning-bg: rgba(245, 158, 11, 0.14);
+  --color-warning-border: rgba(251, 191, 36, 0.32);
   --color-code-bg: #1e293b;
   --color-code-block-bg: #020617;
   --color-code-block-text: #e2e8f0;
@@ -1093,6 +1099,28 @@ a:hover {
   min-width: 0;
 }
 
+.pdf-parse-summary {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  gap: 6px;
+  grid-column: 1 / -1;
+}
+
+.pdf-parse-summary span {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  padding: 3px 7px;
+}
+
+.pdf-parse-summary-warning span {
+  border-color: var(--color-warning-border);
+  color: var(--color-warning);
+}
+
 .ai-chat-control input {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -1146,7 +1174,11 @@ a:hover {
   color: var(--color-primary);
   font-size: 0.75rem;
   font-weight: 700;
+  max-width: min(100%, 360px);
+  overflow: hidden;
   padding: 3px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ============================================
@@ -1317,6 +1349,54 @@ a:hover {
 
 .editor-content .tiptap strong {
   font-weight: 700;
+}
+
+/* Table */
+.editor-content .tiptap table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.8em 0;
+  table-layout: fixed;
+  overflow: hidden;
+}
+
+.editor-content .tiptap td,
+.editor-content .tiptap th {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  min-width: 60px;
+  vertical-align: top;
+  position: relative;
+}
+
+.editor-content .tiptap th {
+  font-weight: 600;
+  background: var(--color-surface-subtle);
+}
+
+.editor-content .tiptap .selectedCell {
+  background: var(--color-primary-light);
+}
+
+.editor-content .tiptap .column-resize-handle {
+  position: absolute;
+  right: -1px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--color-primary);
+  cursor: col-resize;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.editor-content .tiptap .column-resize-handle:hover,
+.editor-content .tiptap:hover .column-resize-handle {
+  opacity: 0.6;
+}
+
+.editor-content .tiptap table p {
+  margin: 0;
 }
 
 /* Image */

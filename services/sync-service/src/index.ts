@@ -3,6 +3,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { MongoClient, ObjectId } from 'mongodb';
 import type { NextFunction, Request, Response } from 'express';
+import { errorHandler, notFoundHandler } from './error-handler.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3005);
@@ -261,6 +262,10 @@ app.post('/push', authMiddleware, async (req: AuthRequest, res) => {
     res.status(500).json({ error: '提交同步数据失败' });
   }
 });
+
+// 错误处理中间件
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 process.on('SIGTERM', async () => {
   await mongoClient?.close();

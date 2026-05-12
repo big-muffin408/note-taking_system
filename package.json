@@ -12,7 +12,9 @@
     "start:all": "bash scripts/start-all.sh",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "docker:up": "docker compose -f docker-compose.yml -f docker-compose.mineru.yml up --build",
+    "test": "npm run test --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "docker:up": "docker compose up --build",
     "docker:up:mineru": "docker compose -f docker-compose.yml -f docker-compose.mineru.yml up --build",
     "docker:down": "docker compose down"
   },

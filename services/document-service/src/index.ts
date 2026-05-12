@@ -6,6 +6,7 @@ import { Client as MinioClient } from 'minio';
 import { ObjectId } from 'mongodb';
 import { getDb } from './db.js';
 import { authMiddleware, type AuthRequest } from './middleware.js';
+import { errorHandler, notFoundHandler, AppError, ValidationError, NotFoundError } from './error-handler.js';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3002);
@@ -47,6 +48,9 @@ interface PdfParseResponse {
     mimeType: string;
     dataBase64: string;
   }>;
+  assetCount?: number;
+  fallbackReason?: string;
+  warnings?: string[];
   chunks: number;
 }
 
@@ -554,6 +558,9 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       parser: parsed.parser,
       wordCount: parsed.wordCount,
       chunks: parsed.chunks,
+      assetCount: parsed.assetCount ?? storedAssets.length,
+      fallbackReason: parsed.fallbackReason,
+      warnings: parsed.warnings ?? [],
       extractedImages: storedAssets,
       status: parsed.status,
       createdAt: now,
@@ -569,6 +576,11 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       bytes: file.size,
       pages: parsed.pages,
       parser: parsed.parser,
+      wordCount: parsed.wordCount,
+      chunks: parsed.chunks,
+      assetCount: parsed.assetCount ?? storedAssets.length,
+      fallbackReason: parsed.fallbackReason,
+      warnings: parsed.warnings ?? [],
       status: parsed.status,
       markdownDraft
     });
@@ -959,6 +971,10 @@ app.get('/internal/check-ownership', async (req, res) => {
     res.status(500).json({ error: '检查所有权失败' });
   }
 });
+
+// 错误处理中间件
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 app.listen(port, () => {
   console.log(`document-service listening on ${port}`);

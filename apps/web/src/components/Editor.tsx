@@ -3,7 +3,11 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Image from '@tiptap/extension-image';
-import Mathematics from '@tiptap/extension-mathematics';
+import { Table } from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableCell from '@tiptap/extension-table-cell';
+import TableHeader from '@tiptap/extension-table-header';
+import { MathematicsDisplayMode } from '../lib/MathematicsDisplayMode';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 import type * as Y from 'yjs';
@@ -54,11 +58,14 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
       }),
       Placeholder.configure({ placeholder: '开始编写笔记…' }),
       Image.configure({ inline: false, allowBase64: true }),
-      Mathematics.configure({
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      MathematicsDisplayMode.configure({
         regex: /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g,
         katexOptions: {
           throwOnError: false,
-          displayMode: false,
         },
       }),
       ...(collaboration
@@ -299,6 +306,13 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
             title="插入数学公式"
           >
             ∑
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+            title="插入表格"
+          >
+            ⊞
           </button>
         </div>
 

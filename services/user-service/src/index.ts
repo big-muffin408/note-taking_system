@@ -6,6 +6,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import pool, { ensureUserSchema } from './db.js';
 import { authMiddleware, adminMiddleware, signToken, type AuthRequest } from './middleware.js';
+import { errorHandler, notFoundHandler, AppError, ValidationError, AuthenticationError, NotFoundError, ConflictError, RateLimitError } from './error-handler.js';
 
 async function auditLog(userId: string | null, action: string, targetId?: string, metadata?: Record<string, unknown>) {
   try {
@@ -805,6 +806,10 @@ app.get('/internal/check-access', async (req, res) => {
     res.status(500).json({ error: '检查权限失败' });
   }
 });
+
+// 错误处理中间件
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 await ensureUserSchema();
 
