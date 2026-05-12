@@ -1121,6 +1121,66 @@ a:hover {
   color: var(--color-warning);
 }
 
+.pdf-job-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 7px;
+  grid-column: 1 / -1;
+  padding: 9px 10px;
+}
+
+.pdf-job-panel-failed {
+  border-color: var(--color-error-border);
+}
+
+.pdf-job-panel-parsed {
+  border-color: var(--color-success-border);
+}
+
+.pdf-job-main,
+.pdf-job-meta,
+.pdf-job-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pdf-job-main {
+  color: var(--color-text);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.pdf-job-status {
+  color: var(--color-primary);
+}
+
+.pdf-job-panel-failed .pdf-job-status,
+.pdf-job-actions {
+  color: var(--color-error);
+}
+
+.pdf-job-meta {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.pdf-job-meta span {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  padding: 3px 7px;
+}
+
+.pdf-job-actions {
+  font-size: 0.8rem;
+  justify-content: space-between;
+}
+
 .ai-chat-control input {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -2396,6 +2456,11 @@ a:hover {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .ai-spinner {
+    animation-duration: 0.9s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 

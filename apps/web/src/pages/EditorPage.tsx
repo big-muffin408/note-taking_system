@@ -52,7 +52,26 @@ interface PdfUploadResponse {
   fallbackReason?: string;
   warnings?: string[];
   status: string;
-  markdownDraft: string;
+  markdownDraft?: string;
+}
+
+type PdfJobStatus = 'queued' | 'parsing' | 'parsed' | 'failed';
+
+interface PdfJobResponse {
+  jobId: string;
+  pdfId: string;
+  noteId?: string;
+  fileName?: string;
+  bytes?: number;
+  status: PdfJobStatus;
+  parser?: string;
+  pages?: number;
+  wordCount?: number;
+  chunks?: number;
+  assetCount?: number;
+  fallbackReason?: string;
+  warnings?: string[];
+  error?: string;
 }
 
 interface AiChatResponse {
@@ -92,6 +111,13 @@ function getStatusText(status: CollabStatus, count: number) {
   if (status === 'connected' || status === 'synced') return `协同已连接 · ${count} 人在线`;
   if (status === 'connecting') return '协同连接中…';
   return '协同离线，本地可继续编辑';
+}
+
+function getPdfJobStatusText(status: PdfJobStatus) {
+  if (status === 'queued') return '已上传，等待解析';
+  if (status === 'parsing') return 'MinerU/PDF 解析中';
+  if (status === 'parsed') return '解析完成，正在打开笔记';
+  return '解析失败';
 }
 
 function escapeHtml(value: string) {
@@ -161,6 +187,7 @@ export default function EditorPage() {
   const [collaboratorCount, setCollaboratorCount] = useState(1);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [lastPdfUpload, setLastPdfUpload] = useState<PdfUploadResponse | null>(null);
+  const [pdfJob, setPdfJob] = useState<PdfJobResponse | null>(null);
 
   // AI state — streaming
   const [aiLoading, setAiLoading] = useState<AiMode | null>(null);
@@ -249,6 +276,53 @@ export default function EditorPage() {
     window.addEventListener('note-id-replaced', handleIdReplaced);
     return () => window.removeEventListener('note-id-replaced', handleIdReplaced);
   }, [id, navigate]);
+
+  useEffect(() => {
+    if (!pdfJob || !token) return;
+    if (pdfJob.status !== 'queued' && pdfJob.status !== 'parsing') return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await api.get<PdfJobResponse>(`/api/doc/pdf/jobs/${pdfJob.jobId}`, token);
+        if (cancelled) return;
+        setPdfJob(next);
+
+        if (next.status === 'parsed' && next.noteId) {
+          setUploadingPdf(false);
+          setLastPdfUpload({
+            pdfId: next.pdfId,
+            noteId: next.noteId,
+            fileName: next.fileName ?? 'PDF',
+            bytes: next.bytes ?? 0,
+            pages: next.pages ?? 0,
+            parser: next.parser,
+            wordCount: next.wordCount,
+            chunks: next.chunks,
+            assetCount: next.assetCount,
+            fallbackReason: next.fallbackReason,
+            warnings: next.warnings,
+            status: next.status,
+          });
+          await fetchNotes();
+          navigate(`/note/${next.noteId}`);
+        } else if (next.status === 'failed') {
+          setUploadingPdf(false);
+          setAiError(next.error ?? 'PDF 解析失败');
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error('PDF job polling failed:', err);
+        setUploadingPdf(false);
+        setAiError(err instanceof Error ? err.message : '获取 PDF 解析状态失败');
+      }
+    }, pdfJob.status === 'queued' ? 1000 : 1800);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [fetchNotes, navigate, pdfJob, token]);
 
   useEffect(() => {
     if (!id || !token || !user) return;
@@ -502,18 +576,32 @@ export default function EditorPage() {
 
     setUploadingPdf(true);
     setAiError('');
+    setPdfJob(null);
     try {
       const form = new FormData();
       form.append('file', file);
-      const result = await api.postForm<PdfUploadResponse>('/api/doc/pdf/upload', form, token);
-      setLastPdfUpload(result);
-      await fetchNotes();
-      navigate(`/note/${result.noteId}`);
+      const result = await api.postForm<PdfJobResponse>('/api/doc/pdf/jobs', form, token);
+      setPdfJob(result);
     } catch (err) {
       console.error('PDF upload failed:', err);
       setAiError(err instanceof Error ? err.message : 'PDF 上传失败');
-    } finally {
       setUploadingPdf(false);
+    }
+  };
+
+  const retryPdfJob = async () => {
+    if (!pdfJob || !token) return;
+    setUploadingPdf(true);
+    setAiError('');
+    try {
+      const result = await api.post<PdfJobResponse>(`/api/doc/pdf/jobs/${pdfJob.jobId}/retry`, {}, token);
+      setPdfJob(result);
+    } catch (err) {
+      console.error('PDF retry failed:', err);
+      setAiError(err instanceof Error ? err.message : 'PDF 重试失败');
+      setUploadingPdf(false);
+    } finally {
+      // Parsed/failed state is settled by the polling effect.
     }
   };
 
@@ -849,7 +937,7 @@ export default function EditorPage() {
         )}
         <div className="pdf-upload-control">
           <label className="btn-secondary">
-            {uploadingPdf ? '解析中…' : '上传 PDF'}
+            {uploadingPdf ? '处理中…' : '上传 PDF'}
             <input
               type="file"
               accept="application/pdf,.pdf"
@@ -868,6 +956,34 @@ export default function EditorPage() {
             ) : '生成摘要'}
           </button>
         </div>
+
+        {pdfJob && (
+          <div className={`pdf-job-panel pdf-job-panel-${pdfJob.status}`}>
+            <div className="pdf-job-main">
+              <span className="pdf-job-status">{getPdfJobStatusText(pdfJob.status)}</span>
+              {pdfJob.fileName && <span>{pdfJob.fileName}</span>}
+              <span>任务 {pdfJob.jobId.slice(-8)}</span>
+            </div>
+            <div className="pdf-job-meta">
+              {pdfJob.parser && <span>{pdfJob.parser}</span>}
+              {typeof pdfJob.pages === 'number' && <span>{pdfJob.pages} 页</span>}
+              {typeof pdfJob.chunks === 'number' && <span>{pdfJob.chunks} chunks</span>}
+              {typeof pdfJob.assetCount === 'number' && <span>{pdfJob.assetCount} 图片</span>}
+              {pdfJob.fallbackReason && <span>{pdfJob.fallbackReason}</span>}
+              {pdfJob.warnings?.slice(0, 1).map((warning) => (
+                <span key={warning}>{warning}</span>
+              ))}
+            </div>
+            {pdfJob.status === 'failed' && (
+              <div className="pdf-job-actions">
+                <span>{pdfJob.error ?? 'PDF 解析失败'}</span>
+                <button type="button" className="btn-secondary" onClick={retryPdfJob} disabled={uploadingPdf}>
+                  {uploadingPdf ? '重试中…' : '重试解析'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {lastPdfUpload && (
           <div className={`pdf-parse-summary${lastPdfUpload.fallbackReason ? ' pdf-parse-summary-warning' : ''}`}>

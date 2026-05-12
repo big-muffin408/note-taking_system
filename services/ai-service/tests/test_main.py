@@ -5,7 +5,9 @@ os.environ.setdefault("AI_PROVIDER", "mock")
 os.environ.setdefault("PDF_PARSE_PROVIDER", "pymupdf")
 os.environ.setdefault("CHROMA_PERSIST_DIR", "/tmp/test_chroma_data")
 
+import pytest
 from fastapi.testclient import TestClient
+import app.main as main
 from app.main import app
 
 client = TestClient(app)
@@ -123,3 +125,50 @@ class TestServiceAuth:
             "text": "test",
         })
         assert response.status_code == 200
+
+
+class TestMineruApiParsing:
+    @pytest.mark.asyncio
+    async def test_mineru_api_requests_images_and_extracts_assets(self, monkeypatch):
+        captured = {}
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "results": {
+                        "sample": {
+                            "md_content": "# Title\n\n![diagram](images/diagram.png)\n\n$E=mc^2$",
+                            "pages": 1,
+                            "images": {
+                                "images/diagram.png": "iVBORw0KGgo=",
+                            },
+                        }
+                    }
+                }
+
+        class FakeClient:
+            async def post(self, url, data, files, timeout):
+                captured["url"] = url
+                captured["data"] = data
+                captured["files"] = files
+                captured["timeout"] = timeout
+                return FakeResponse()
+
+        monkeypatch.setattr(main, "MINERU_API_URL", "http://mineru-api:8000")
+        monkeypatch.setattr(main, "MINERU_LANGUAGE", "ch")
+        monkeypatch.setattr(main, "MINERU_BACKEND", "pipeline")
+        monkeypatch.setattr(main, "get_http_client", lambda: FakeClient())
+
+        parsed = await main.parse_pdf_with_mineru_api(b"%PDF-1.4\n", "sample.pdf")
+
+        assert captured["url"] == "http://mineru-api:8000/file_parse"
+        assert captured["data"]["return_images"] == "true"
+        assert captured["data"]["formula_enable"] == "true"
+        assert captured["data"]["table_enable"] == "true"
+        assert parsed["parser"] == "mineru-api"
+        assert parsed["pages"] == 1
+        assert parsed["assets"][0]["path"] == "images/diagram.png"
+        assert parsed["assets"][0]["dataBase64"] == "iVBORw0KGgo="

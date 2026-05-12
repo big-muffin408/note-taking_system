@@ -345,7 +345,70 @@ Authorization: Bearer <token>
 }
 ```
 
-### 上传 PDF
+### 上传 PDF（推荐：异步任务）
+
+```
+POST /api/doc/pdf/jobs
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+```
+
+**请求体**:
+- `file`: PDF 文件
+
+**响应示例**:
+```json
+{
+  "jobId": "665000000000000000000001",
+  "pdfId": "665000000000000000000002",
+  "status": "queued"
+}
+```
+
+### 查询 PDF 解析任务
+
+```
+GET /api/doc/pdf/jobs/:jobId
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>
+```
+
+**响应示例**:
+```json
+{
+  "jobId": "665000000000000000000001",
+  "pdfId": "665000000000000000000002",
+  "noteId": "665000000000000000000003",
+  "fileName": "example.pdf",
+  "bytes": 102400,
+  "status": "parsed",
+  "parser": "mineru-api",
+  "pages": 10,
+  "wordCount": 5000,
+  "chunks": 50,
+  "assetCount": 3,
+  "warnings": [],
+  "createdAt": "2026-05-12T00:00:00.000Z",
+  "updatedAt": "2026-05-12T00:00:30.000Z"
+}
+```
+
+`status` 取值为 `queued`、`parsing`、`parsed`、`failed`。只有 `failed` 状态可以重试：
+
+```
+POST /api/doc/pdf/jobs/:jobId/retry
+```
+
+重试会复用 MinIO 中已上传的原始 PDF，成功响应仍为 `202`，随后继续轮询任务状态。
+
+### 上传 PDF（兼容：同步解析）
 
 ```
 POST /api/doc/pdf/upload
@@ -363,15 +426,18 @@ Content-Type: multipart/form-data
 **响应示例**:
 ```json
 {
-  "documentId": "document-id",
+  "pdfId": "pdf-id",
   "noteId": "note-id",
   "fileName": "example.pdf",
+  "bytes": 102400,
   "pages": 10,
+  "parser": "mineru-api",
   "wordCount": 5000,
-  "status": "completed",
-  "text": "提取的文本内容...",
-  "markdownDraft": "Markdown 内容...",
-  "chunks": 50
+  "chunks": 50,
+  "assetCount": 3,
+  "warnings": [],
+  "status": "parsed",
+  "markdownDraft": "Markdown 内容..."
 }
 ```
 

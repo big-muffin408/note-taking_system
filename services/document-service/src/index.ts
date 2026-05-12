@@ -54,6 +54,34 @@ interface PdfParseResponse {
   chunks: number;
 }
 
+type PdfJobStatus = 'queued' | 'parsing' | 'parsed' | 'failed';
+
+interface PdfJobResponse {
+  jobId: string;
+  pdfId: string;
+  noteId?: string;
+  fileName: string;
+  bytes: number;
+  status: PdfJobStatus;
+  parser?: string;
+  pages?: number;
+  wordCount?: number;
+  chunks?: number;
+  assetCount?: number;
+  fallbackReason?: string;
+  warnings?: string[];
+  error?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface PdfFileInput {
+  buffer: Buffer;
+  mimetype: string;
+  originalname: string;
+  size: number;
+}
+
 async function auditLog(userId: string, action: string, targetId?: string, metadata?: Record<string, unknown>) {
   try {
     const db = await getDb();
@@ -139,7 +167,7 @@ async function ensureMinioBucket() {
   }
 }
 
-async function putPdfObject(objectName: string, file: Express.Multer.File) {
+async function putPdfObject(objectName: string, file: PdfFileInput) {
   await ensureMinioBucket();
   await minioClient.putObject(
     minioBucket,
@@ -216,7 +244,7 @@ function rewriteHtmlImageRefs(html: string, refToUrl: Map<string, string>) {
 }
 
 async function parsePdfWithAi(
-  file: Express.Multer.File,
+  file: PdfFileInput,
   pdfId: ObjectId,
   noteId: ObjectId,
   fileName: string
@@ -249,6 +277,199 @@ async function parsePdfWithAi(
   }
 
   return response.json() as Promise<PdfParseResponse>;
+}
+
+function validateUploadedPdf(file: Express.Multer.File | undefined): { file: Express.Multer.File; fileName: string } {
+  if (!file) {
+    throw new ValidationError('请上传 PDF 文件');
+  }
+
+  const fileName = normalizeUploadedFileName(file.originalname);
+  const isPdf =
+    file.mimetype === 'application/pdf' ||
+    fileName.toLowerCase().endsWith('.pdf');
+  if (!isPdf) {
+    throw new ValidationError('仅支持上传 PDF 文件');
+  }
+
+  if (file.buffer.length < 4 || file.buffer.subarray(0, 4).toString('ascii') !== '%PDF') {
+    throw new ValidationError('文件内容不是有效的 PDF 格式');
+  }
+
+  return { file, fileName };
+}
+
+function pdfJobToResponse(job: Record<string, any>): PdfJobResponse {
+  return {
+    jobId: job._id.toHexString(),
+    pdfId: job.pdfId,
+    noteId: job.noteId,
+    fileName: job.fileName,
+    bytes: job.bytes,
+    status: job.status,
+    parser: job.parser,
+    pages: job.pages,
+    wordCount: job.wordCount,
+    chunks: job.chunks,
+    assetCount: job.assetCount,
+    fallbackReason: job.fallbackReason,
+    warnings: job.warnings ?? [],
+    error: job.error,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+async function finalizeParsedPdf(
+  userId: string,
+  pdfId: ObjectId,
+  noteId: ObjectId,
+  fileName: string,
+  objectName: string,
+  bytes: number,
+  parsed: PdfParseResponse,
+) {
+  const db = await getDb();
+  const now = new Date();
+  const { refToUrl, storedAssets } = await putExtractedPdfAssets(userId, pdfId, parsed.assets);
+  const markdownDraft = rewriteMarkdownImageRefs(parsed.markdownDraft, refToUrl);
+  const htmlDraft = parsed.htmlDraft ? rewriteHtmlImageRefs(parsed.htmlDraft, refToUrl) : undefined;
+  const content = htmlDraft ?? markdownDraft;
+  const title = stripPdfExtension(fileName);
+
+  await db.collection('documents').updateOne(
+    { _id: noteId },
+    {
+      $setOnInsert: {
+        _id: noteId,
+        createdAt: now,
+      },
+      $set: {
+        title,
+        content,
+        ownerId: userId,
+        sourcePdfId: pdfId.toHexString(),
+        updatedAt: now,
+      },
+    },
+    { upsert: true },
+  );
+
+  await db.collection('pdf_assets').updateOne(
+    { _id: pdfId },
+    {
+      $setOnInsert: {
+        _id: pdfId,
+        createdAt: now,
+      },
+      $set: {
+        noteId: noteId.toHexString(),
+        ownerId: userId,
+        fileName,
+        objectName,
+        bucket: minioBucket,
+        bytes,
+        pages: parsed.pages,
+        parser: parsed.parser,
+        wordCount: parsed.wordCount,
+        chunks: parsed.chunks,
+        assetCount: parsed.assetCount ?? storedAssets.length,
+        fallbackReason: parsed.fallbackReason,
+        warnings: parsed.warnings ?? [],
+        extractedImages: storedAssets,
+        status: parsed.status,
+        updatedAt: now,
+      },
+    },
+    { upsert: true },
+  );
+
+  return {
+    noteId: noteId.toHexString(),
+    markdownDraft,
+    pages: parsed.pages,
+    parser: parsed.parser,
+    wordCount: parsed.wordCount,
+    chunks: parsed.chunks,
+    assetCount: parsed.assetCount ?? storedAssets.length,
+    fallbackReason: parsed.fallbackReason,
+    warnings: parsed.warnings ?? [],
+    status: parsed.status,
+  };
+}
+
+async function processPdfJob(jobId: ObjectId, initialFile?: PdfFileInput) {
+  const db = await getDb();
+  const now = new Date();
+  const job = await db.collection('pdf_parse_jobs').findOne({ _id: jobId });
+  if (!job) return;
+
+  await db.collection('pdf_parse_jobs').updateOne(
+    { _id: jobId },
+    { $set: { status: 'parsing', error: null, updatedAt: now }, $inc: { attempts: 1 } },
+  );
+  await db.collection('pdf_assets').updateOne(
+    { _id: new ObjectId(job.pdfId) },
+    { $set: { status: 'parsing', updatedAt: now } },
+  );
+
+  try {
+    let file = initialFile;
+    if (!file) {
+      const objectStream = await minioClient.getObject(minioBucket, job.objectName);
+      file = {
+        buffer: await streamToBuffer(objectStream),
+        mimetype: 'application/pdf',
+        originalname: job.fileName,
+        size: job.bytes,
+      };
+    }
+
+    const pdfId = new ObjectId(job.pdfId);
+    const noteId = new ObjectId(job.noteId);
+    const parsed = await parsePdfWithAi(file, pdfId, noteId, job.fileName);
+    const result = await finalizeParsedPdf(job.ownerId, pdfId, noteId, job.fileName, job.objectName, job.bytes, parsed);
+    const finishedAt = new Date();
+
+    await db.collection('pdf_parse_jobs').updateOne(
+      { _id: jobId },
+      {
+        $set: {
+          status: 'parsed',
+          noteId: result.noteId,
+          parser: result.parser,
+          pages: result.pages,
+          wordCount: result.wordCount,
+          chunks: result.chunks,
+          assetCount: result.assetCount,
+          fallbackReason: result.fallbackReason,
+          warnings: result.warnings,
+          error: null,
+          updatedAt: finishedAt,
+        },
+      },
+    );
+    await auditLog(job.ownerId, 'upload_pdf', result.noteId, { fileName: job.fileName, pages: result.pages, asyncJobId: jobId.toHexString() });
+  } catch (error) {
+    const failedAt = new Date();
+    const message = error instanceof Error ? error.message : 'PDF 上传解析失败';
+    await db.collection('pdf_parse_jobs').updateOne(
+      { _id: jobId },
+      { $set: { status: 'failed', error: message, updatedAt: failedAt } },
+    );
+    await db.collection('pdf_assets').updateOne(
+      { _id: new ObjectId(job.pdfId) },
+      { $set: { status: 'failed', error: message, updatedAt: failedAt } },
+    );
+  }
 }
 
 app.get('/health', (_req, res) => {
@@ -504,47 +725,52 @@ app.delete('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
 
 app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthRequest, res) => {
   try {
-    const file = req.file;
-    if (!file) {
-      return res.status(400).json({ error: '请上传 PDF 文件' });
-    }
-
-    const isPdf =
-      file.mimetype === 'application/pdf' ||
-      normalizeUploadedFileName(file.originalname).toLowerCase().endsWith('.pdf');
-    if (!isPdf) {
-      return res.status(400).json({ error: '仅支持上传 PDF 文件' });
-    }
-
-    // Magic bytes validation: PDF files start with %PDF
-    if (file.buffer.length < 4 || file.buffer.subarray(0, 4).toString('ascii') !== '%PDF') {
-      return res.status(400).json({ error: '文件内容不是有效的 PDF 格式' });
-    }
+    const { file, fileName } = validateUploadedPdf(req.file);
 
     const db = await getDb();
-    const now = new Date();
     const pdfId = new ObjectId();
     const noteId = new ObjectId();
-    const fileName = normalizeUploadedFileName(file.originalname);
     const objectName = `${req.userId}/${pdfId.toHexString()}-${sanitizeObjectSegment(fileName)}`;
 
     await putPdfObject(objectName, file);
     const parsed = await parsePdfWithAi(file, pdfId, noteId, fileName);
-    const { refToUrl, storedAssets } = await putExtractedPdfAssets(req.userId!, pdfId, parsed.assets);
-    const markdownDraft = rewriteMarkdownImageRefs(parsed.markdownDraft, refToUrl);
-    const htmlDraft = parsed.htmlDraft ? rewriteHtmlImageRefs(parsed.htmlDraft, refToUrl) : undefined;
-    const content = htmlDraft ?? markdownDraft;
-    const title = stripPdfExtension(fileName);
+    const result = await finalizeParsedPdf(req.userId!, pdfId, noteId, fileName, objectName, file.size, parsed);
 
-    await db.collection('documents').insertOne({
-      _id: noteId,
-      title,
-      content,
-      ownerId: req.userId!,
-      sourcePdfId: pdfId.toHexString(),
-      createdAt: now,
-      updatedAt: now
+    await auditLog(req.userId!, 'upload_pdf', noteId.toHexString(), { fileName, pages: result.pages });
+
+    res.status(201).json({
+      pdfId: pdfId.toHexString(),
+      noteId: noteId.toHexString(),
+      fileName,
+      bytes: file.size,
+      pages: result.pages,
+      parser: result.parser,
+      wordCount: result.wordCount,
+      chunks: result.chunks,
+      assetCount: result.assetCount,
+      fallbackReason: result.fallbackReason,
+      warnings: result.warnings,
+      status: result.status,
+      markdownDraft: result.markdownDraft
     });
+  } catch (error) {
+    console.error('PDF upload error:', error);
+    const message = error instanceof Error ? error.message : 'PDF 上传解析失败';
+    res.status(error instanceof AppError ? error.statusCode : 500).json({ error: message });
+  }
+});
+
+app.post('/pdf/jobs', authMiddleware, upload.single('file'), async (req: AuthRequest, res) => {
+  try {
+    const { file, fileName } = validateUploadedPdf(req.file);
+    const db = await getDb();
+    const now = new Date();
+    const jobId = new ObjectId();
+    const pdfId = new ObjectId();
+    const noteId = new ObjectId();
+    const objectName = `${req.userId}/${pdfId.toHexString()}-${sanitizeObjectSegment(fileName)}`;
+
+    await putPdfObject(objectName, file);
 
     await db.collection('pdf_assets').insertOne({
       _id: pdfId,
@@ -554,40 +780,108 @@ app.post('/pdf/upload', authMiddleware, upload.single('file'), async (req: AuthR
       objectName,
       bucket: minioBucket,
       bytes: file.size,
-      pages: parsed.pages,
-      parser: parsed.parser,
-      wordCount: parsed.wordCount,
-      chunks: parsed.chunks,
-      assetCount: parsed.assetCount ?? storedAssets.length,
-      fallbackReason: parsed.fallbackReason,
-      warnings: parsed.warnings ?? [],
-      extractedImages: storedAssets,
-      status: parsed.status,
+      status: 'queued',
+      warnings: [],
+      extractedImages: [],
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     });
 
-    await auditLog(req.userId!, 'upload_pdf', noteId.toHexString(), { fileName, pages: parsed.pages });
-
-    res.status(201).json({
+    await db.collection('pdf_parse_jobs').insertOne({
+      _id: jobId,
       pdfId: pdfId.toHexString(),
       noteId: noteId.toHexString(),
+      ownerId: req.userId!,
       fileName,
+      objectName,
       bytes: file.size,
-      pages: parsed.pages,
-      parser: parsed.parser,
-      wordCount: parsed.wordCount,
-      chunks: parsed.chunks,
-      assetCount: parsed.assetCount ?? storedAssets.length,
-      fallbackReason: parsed.fallbackReason,
-      warnings: parsed.warnings ?? [],
-      status: parsed.status,
-      markdownDraft
+      status: 'queued',
+      attempts: 0,
+      warnings: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    if (process.env.DISABLE_PDF_JOB_WORKER !== 'true') {
+      setImmediate(() => {
+        void processPdfJob(jobId, {
+          buffer: file.buffer,
+          mimetype: file.mimetype,
+          originalname: file.originalname,
+          size: file.size,
+        });
+      });
+    }
+
+    res.status(202).json({
+      jobId: jobId.toHexString(),
+      pdfId: pdfId.toHexString(),
+      status: 'queued',
     });
   } catch (error) {
-    console.error('PDF upload error:', error);
-    const message = error instanceof Error ? error.message : 'PDF 上传解析失败';
-    res.status(500).json({ error: message });
+    console.error('Create PDF job error:', error);
+    const message = error instanceof Error ? error.message : 'PDF 上传失败';
+    res.status(error instanceof AppError ? error.statusCode : 500).json({ error: message });
+  }
+});
+
+app.get('/pdf/jobs/:jobId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const db = await getDb();
+    let jobId: ObjectId;
+    try {
+      jobId = new ObjectId(req.params.jobId);
+    } catch {
+      return res.status(400).json({ error: '无效的 PDF 任务 ID' });
+    }
+
+    const job = await db.collection('pdf_parse_jobs').findOne({ _id: jobId, ownerId: req.userId });
+    if (!job) return res.status(404).json({ error: 'PDF 解析任务不存在' });
+
+    res.json(pdfJobToResponse(job));
+  } catch (error) {
+    console.error('Get PDF job error:', error);
+    res.status(500).json({ error: '获取 PDF 解析任务失败' });
+  }
+});
+
+app.post('/pdf/jobs/:jobId/retry', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const db = await getDb();
+    let jobId: ObjectId;
+    try {
+      jobId = new ObjectId(req.params.jobId);
+    } catch {
+      return res.status(400).json({ error: '无效的 PDF 任务 ID' });
+    }
+
+    const job = await db.collection('pdf_parse_jobs').findOne({ _id: jobId, ownerId: req.userId });
+    if (!job) return res.status(404).json({ error: 'PDF 解析任务不存在' });
+    if (job.status !== 'failed') {
+      return res.status(409).json({ error: '只有失败的 PDF 解析任务可以重试' });
+    }
+
+    const now = new Date();
+    await db.collection('pdf_parse_jobs').updateOne(
+      { _id: jobId },
+      { $set: { status: 'queued', error: null, updatedAt: now } },
+    );
+    await db.collection('pdf_assets').updateOne(
+      { _id: new ObjectId(job.pdfId) },
+      { $set: { status: 'queued', error: null, updatedAt: now } },
+    );
+
+    if (process.env.DISABLE_PDF_JOB_WORKER !== 'true') {
+      setImmediate(() => {
+        void processPdfJob(jobId);
+      });
+    }
+
+    const updated = await db.collection('pdf_parse_jobs').findOne({ _id: jobId });
+    res.status(202).json(pdfJobToResponse(updated!));
+  } catch (error) {
+    console.error('Retry PDF job error:', error);
+    res.status(500).json({ error: '重试 PDF 解析任务失败' });
   }
 });
 
@@ -976,6 +1270,10 @@ app.get('/internal/check-ownership', async (req, res) => {
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-app.listen(port, () => {
-  console.log(`document-service listening on ${port}`);
-});
+export { app };
+
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(port, () => {
+    console.log(`document-service listening on ${port}`);
+  });
+}

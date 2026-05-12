@@ -227,7 +227,10 @@ docker compose -f docker-compose.yml -f docker-compose.mineru.yml build --build-
 | POST | `/notes` | 创建笔记 | 是 |
 | PUT | `/notes/:id` | 更新笔记，支持 `baseUpdatedAt` 冲突检测 | 是 |
 | DELETE | `/notes/:id` | 删除笔记 | 是 |
-| POST | `/pdf/upload` | 上传 PDF、解析、创建笔记、写入 MinIO/Chroma | 是 |
+| POST | `/pdf/jobs` | 推荐路径：上传 PDF、创建异步解析任务、写入 MinIO | 是 |
+| GET | `/pdf/jobs/:jobId` | 查询 PDF 解析任务状态 | 是 |
+| POST | `/pdf/jobs/:jobId/retry` | 重试失败的 PDF 解析任务 | 是 |
+| POST | `/pdf/upload` | 兼容路径：同步上传 PDF、解析、创建笔记、写入 MinIO/Chroma | 是 |
 | POST | `/notes/:id/versions` | 创建版本快照 | 是 |
 | GET | `/notes/:id/versions` | 查看版本列表 | 是 |
 | GET | `/notes/:id/versions/:versionId` | 查看版本详情 | 是 |
@@ -295,6 +298,19 @@ Google OAuth 常用本地配置：
 ```bash
 npm run build
 python -m compileall services/ai-service/app
+npm --workspace @notes/document-service test -- --runInBand pdf-jobs.test.ts
+cd services/ai-service && pytest
+```
+
+端到端 smoke 推荐在 Docker/Nginx 模式下执行：
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose exec -T nginx wget -S -qO- --header 'Host: localhost' http://127.0.0.1/api/user/health
+docker compose exec -T nginx wget -S -qO- --header 'Host: localhost' http://127.0.0.1/api/doc/health
+docker compose exec -T nginx wget -S -qO- --header 'Host: localhost' http://127.0.0.1/api/ai/health
+docker compose exec -T nginx wget -S -qO- --header 'Host: localhost' http://127.0.0.1/api/sync/health
 ```
 
 可选安全检查：
@@ -312,8 +328,16 @@ npm audit --offline
 5. 用两个窗口打开同一篇笔记，在窗口 A 保存后，窗口 B 基于旧版本保存应进入“有冲突”状态。
 6. 分别验证“保留本地草稿”和“使用服务器版本”都能恢复到“已同步”。
 
+## PDF 解析任务排障
+
+- 前端上传 PDF 默认走 `/api/doc/pdf/jobs`，返回 `202` 和 `jobId` 后轮询 `/api/doc/pdf/jobs/:jobId`。状态应从 `queued` 进入 `parsing`，最后变为 `parsed` 或 `failed`。
+- 如果任务长时间停在 `queued`，优先看 `document-service` 日志和后台 worker 是否启动；测试环境会通过 `DISABLE_PDF_JOB_WORKER=true` 主动关闭 worker。
+- 如果任务停在 `parsing` 后失败，查看任务返回的 `error`、`ai-service` 日志和 `/api/ai/health` 中的 `pdfParseProvider`、`mineruApiUrl`。
+- `parser=pymupdf` 表示当前走轻量回退链路；需要高质量版面、图片、公式时，应启动 MinerU API 并确认上传结果展示 `parser=mineru-api`。
+- 只有 `failed` 状态任务可以调用 `/api/doc/pdf/jobs/:jobId/retry`。重试会复用 MinIO 中的原始 PDF，不要求用户重新选择文件。
+
 ## 当前代码分析摘要
 
 这次更新后，项目已经不是单纯的“PDF/AI 第二迭代”状态，而是补上了偏产品化的第三层能力：离线编辑、分享权限、版本历史和管理后台。前端 `EditorPage` 现在承担了协同、离线、PDF、流式 AI、版本恢复、分享弹窗等复合工作流；后端也从简单 CRUD 扩展成 user/document/collab/sync/ai 多服务协作。
 
-下一步最值得做的是补验证：先把当前 README 中的启动和健康检查跑通，再围绕分享权限、离线冲突、版本恢复、PDF 解析回退和流式 AI 写一组端到端 smoke。这样项目会从“功能都接上了”进入“每次更新都不容易散架”的阶段。
+当前质量收口重点是：PDF 异步解析任务、失败重试、离线冲突、版本恢复和 MinerU 图片/公式链路都有自动化或 smoke 覆盖，后续新增功能前应先保持这些检查为绿色。
