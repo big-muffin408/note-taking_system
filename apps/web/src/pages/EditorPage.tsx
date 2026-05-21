@@ -17,6 +17,7 @@ import Editor from '../components/Editor';
 import VersionHistory from '../components/VersionHistory';
 import ShareDialog from '../components/ShareDialog';
 import { htmlToMarkdown, downloadFile } from '../lib/markdownConvert';
+import { getWsBaseUrl } from '../lib/electronConfig';
 
 interface NoteDetail {
   id: string;
@@ -85,10 +86,8 @@ interface AiChatResponse {
   }>;
 }
 
-const WS_BASE = import.meta.env.VITE_WS_BASE_URL ?? '/ws';
-
 function getCollabServerUrl() {
-  const base = `${WS_BASE}`.replace(/\/$/, '');
+  const base = getWsBaseUrl().replace(/\/$/, '');
 
   if (base.startsWith('ws://') || base.startsWith('wss://')) {
     return `${base}/collab`;

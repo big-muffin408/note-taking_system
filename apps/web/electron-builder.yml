@@ -1,0 +1,29 @@
+appId: com.notes.desktop
+productName: AI Notes
+directories:
+  output: release
+files:
+  - dist/**/*
+  - out-electron/**/*
+mac:
+  target:
+    - dmg
+    - zip
+  icon: public/pwa-512x512.svg
+win:
+  target:
+    - nsis
+    - portable
+  icon: public/icon.ico
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: public/pwa-512x512.svg
+  category: Office
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

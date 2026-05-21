@@ -1,6 +1,6 @@
 # 基于 AI 增强的协作式文档笔记系统
 
-这是一个按 `docs/开发任务书.md` 与 `docs/开发计划书.md` 演进的可运行 monorepo。当前项目已经从基础骨架进入可演示产品阶段：邮箱验证码注册、Google 登录、富文本笔记、多人协同、PDF 解析成可编辑笔记、AI 摘要/问答/润色、离线同步、版本历史、分享权限和管理后台都已经接入现有前后端链路。
+这是一个按 `docs/开发任务书.md` 与 `docs/开发计划书.md` 演进的可运行 monorepo。当前项目已经从基础骨架进入可演示产品阶段：邮箱验证码注册、Google 登录、富文本笔记、多人协同、PDF 解析成可编辑笔记、AI 摘要/问答/润色、离线同步、版本历史、分享权限、管理后台和 Electron 桌面端都已经接入现有前后端链路。
 
 ## 当前进展
 
@@ -15,6 +15,8 @@
 - 版本历史：协同服务自动快照，文档服务支持手动快照、版本列表、预览和恢复。
 - 分享权限：按邮箱邀请协作者，支持只读/可编辑权限；共享笔记会出现在被分享者列表中。
 - 管理后台：管理员可查看用户、调整角色，并查看主要服务健康状态。
+- 深色模式：支持明暗主题切换，基于 CSS 变量实现。
+- Electron 桌面端：基于 electron-vite + electron-builder，支持 macOS (dmg/zip)、Windows (nsis/portable)、Linux (AppImage/deb) 打包。
 
 ### 仍可继续完善
 
@@ -22,11 +24,12 @@
 - 生产化安全：强制配置内部服务密钥、生产级 JWT/SMTP/OAuth 配置、审计日志查询页面。
 - PDF 高质量解析体验：MinerU 首次构建、模型缓存、解析进度和失败重试 UI。
 - 自动化测试：核心接口、离线冲突、分享权限和版本恢复还需要更系统的测试覆盖。
+- Electron 桌面端：自动更新、系统托盘、本地文件关联。
 
 ## 技术栈
 
 ```text
-apps/web                    React + Vite + TypeScript + TipTap
+apps/web                    React + Vite + TypeScript + TipTap + Electron 桌面端
 services/user-service       用户、OAuth、分享、管理后台 API（MySQL）
 services/document-service   笔记、PDF、版本历史 API（MongoDB + MinIO）
 services/collab-service     Yjs WebSocket 协同服务（MongoDB 持久化）
@@ -122,6 +125,31 @@ python -m uvicorn app.main:app --app-dir services/ai-service --host 0.0.0.0 --po
 ```text
 http://localhost:5173
 ```
+
+### Electron 桌面端启动
+
+开发模式（需要先启动后端服务）：
+
+```bash
+npm run dev:electron --workspace @notes/web
+```
+
+构建 Electron 应用：
+
+```bash
+npm run build:electron --workspace @notes/web
+```
+
+打包为桌面应用（生成 dmg/exe/AppImage 等安装包）：
+
+```bash
+npm run build:desktop --workspace @notes/web
+```
+
+打包产物在 `apps/web/release/` 目录。支持平台：
+- macOS：dmg、zip
+- Windows：nsis（安装程序）、portable（便携版）
+- Linux：AppImage、deb
 
 ## MinerU 高质量 PDF 解析
 
@@ -300,6 +328,9 @@ npm run build
 python -m compileall services/ai-service/app
 npm --workspace @notes/document-service test -- --runInBand pdf-jobs.test.ts
 cd services/ai-service && pytest
+
+# Electron 构建检查
+npm run build:electron --workspace @notes/web
 ```
 
 端到端 smoke 推荐在 Docker/Nginx 模式下执行：
@@ -338,6 +369,6 @@ npm audit --offline
 
 ## 当前代码分析摘要
 
-这次更新后，项目已经不是单纯的“PDF/AI 第二迭代”状态，而是补上了偏产品化的第三层能力：离线编辑、分享权限、版本历史和管理后台。前端 `EditorPage` 现在承担了协同、离线、PDF、流式 AI、版本恢复、分享弹窗等复合工作流；后端也从简单 CRUD 扩展成 user/document/collab/sync/ai 多服务协作。
+项目已进入产品化阶段，前端 `EditorPage` 承担了协同、离线、PDF、流式 AI、版本恢复、分享弹窗等复合工作流；后端从简单 CRUD 扩展成 user/document/collab/sync/ai 多服务协作。新增 Electron 桌面端支持，通过 electron-vite 实现开发热更新，electron-builder 支持 macOS/Windows/Linux 三平台打包。
 
 当前质量收口重点是：PDF 异步解析任务、失败重试、离线冲突、版本恢复和 MinerU 图片/公式链路都有自动化或 smoke 覆盖，后续新增功能前应先保持这些检查为绿色。

@@ -19,3 +19,5 @@ logs/
 data/
 tmp/
 .DS_Store
+out-electron/
+release/

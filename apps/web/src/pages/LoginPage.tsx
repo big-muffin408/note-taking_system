@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { ApiError } from '../lib/api';
+import { isElectron } from '../lib/electronConfig';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -28,7 +29,13 @@ export default function LoginPage() {
       await login(email, password);
       navigate('/', { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '登录失败，请稍后重试');
+      if (err instanceof ApiError) {
+        setError(err.message);
+      } else if (isElectron()) {
+        setError('无法连接到后端服务，请在「文件 → 设置」中检查后端地址配置');
+      } else {
+        setError('登录失败，请稍后重试');
+      }
     } finally {
       setSubmitting(false);
     }

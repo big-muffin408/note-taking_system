@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+import { getApiBaseUrl } from './electronConfig';
 
 export class ApiError extends Error {
   status: number;
@@ -27,7 +27,7 @@ async function request<T>(
     headers['Content-Type'] = headers['Content-Type'] ?? 'application/json';
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetch(`${getApiBaseUrl()}${path}`, { ...options, headers });
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -88,7 +88,7 @@ export async function streamAI(
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}?stream=true`, {
+    res = await fetch(`${getApiBaseUrl()}${path}?stream=true`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),

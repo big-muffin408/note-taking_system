@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { NotesProvider } from './contexts/NotesContext';
@@ -8,6 +8,8 @@ import OAuthCallbackPage from './pages/OAuthCallbackPage';
 import EditorPage from './pages/EditorPage';
 import AdminPage from './pages/AdminPage';
 import MainLayout from './components/MainLayout';
+import SettingsDialog from './components/SettingsDialog';
+import { isElectron, isBackendConfigured } from './lib/electronConfig';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -100,10 +102,21 @@ function GuestOnly({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    window.electronAPI?.onOpenSettings(() => setShowSettings(true));
+    // 首次启动未配置后端地址时，自动弹出设置
+    if (isElectron() && !isBackendConfigured()) {
+      setShowSettings(true);
+    }
+  }, []);
+
   return (
     <BrowserRouter>
       <ErrorBoundary>
       <AuthProvider>
+        {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
         <Routes>
           <Route
             path="/auth/callback"
