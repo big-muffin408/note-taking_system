@@ -1,139 +1,156 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+# ============================================================================
+# start-all.sh — One-click startup for the AI collaborative note-taking system.
+#
+# Builds and starts the full Docker Compose stack, waits for the API gateway to
+# become reachable, then prints access URLs.
+#
+# Usage:  scripts/start-all.sh [options]      (or: npm run start:all)
+# ============================================================================
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+set -euo pipefail
+
+# --- Resolve repo root (this script lives in scripts/) ---------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
-WITH_MINERU=1
+# --- Defaults --------------------------------------------------------------
+COMPOSE_FILES=(-f docker-compose.yml)
+STACK_LABEL="default"
 BUILD=1
+FOLLOW_LOGS=0
+ACTION="up"
 
 usage() {
   cat <<'EOF'
 Usage: scripts/start-all.sh [options]
 
 Options:
-  --no-mineru   Start the base stack only.
-  --no-build    Reuse existing images instead of rebuilding.
-  -h, --help    Show this help.
+  --mineru      Include the MinerU PDF parser overlay (GPU required)
+  --cuda        Include the CUDA overlay for the AI service (GPU required)
+  --no-build    Skip image rebuild — faster when nothing changed
+  --logs        Follow combined container logs after startup
+  --down        Stop and remove the stack, then exit
+  -h, --help    Show this help
 
-Environment:
-  MINERU_APT_MIRROR  Ubuntu apt mirror for mineru-api builds.
-                     Defaults to http://mirrors.aliyun.com/ubuntu.
-                     Set to empty string to use the base image's original sources.
+With no options: builds and starts the full stack in the background.
 EOF
 }
 
-while (($# > 0)); do
+# --- Parse arguments -------------------------------------------------------
+while [[ $# -gt 0 ]]; do
   case "$1" in
-    --no-mineru)
-      WITH_MINERU=0
-      ;;
-    --no-build)
-      BUILD=0
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+    --mineru)   COMPOSE_FILES+=(-f docker-compose.mineru.yml); STACK_LABEL="mineru" ;;
+    --cuda)     COMPOSE_FILES+=(-f docker-compose.cuda.yml);   STACK_LABEL="cuda" ;;
+    --no-build) BUILD=0 ;;
+    --logs)     FOLLOW_LOGS=1 ;;
+    --down)     ACTION="down" ;;
+    -h|--help)  usage; exit 0 ;;
+    *) echo "❌ Unknown option: $1" >&2; echo ""; usage; exit 1 ;;
   esac
   shift
 done
 
+dc() { docker compose "${COMPOSE_FILES[@]}" "$@"; }
+
+# Read a value from .env, falling back to a default.
+env_val() {
+  local key="$1" default="${2:-}" val=""
+  if [[ -f .env ]]; then
+    val="$(grep -E "^${key}=" .env | tail -n1 | cut -d= -f2- || true)"
+  fi
+  echo "${val:-$default}"
+}
+
+# --- Pre-flight checks -----------------------------------------------------
+if ! command -v docker >/dev/null 2>&1; then
+  echo "❌ docker is not installed or not on PATH" >&2
+  exit 1
+fi
 if ! docker compose version >/dev/null 2>&1; then
-  echo "Docker Compose is not available. Please start Docker Desktop or install Docker Compose." >&2
+  echo "❌ 'docker compose' is unavailable — update Docker to a recent version" >&2
+  exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+  echo "❌ Docker daemon is not running — start Docker Desktop and retry" >&2
   exit 1
 fi
 
-if [[ ! -f .env && -f .env.example ]]; then
-  cp .env.example .env
-  echo "Created .env from .env.example"
+# --- Stop action -----------------------------------------------------------
+if [[ "$ACTION" == "down" ]]; then
+  echo "🛑 Stopping the stack..."
+  dc down
+  echo "✅ Stack stopped"
+  exit 0
 fi
 
-compose_base=(docker compose -f docker-compose.yml)
-compose_mineru=(docker compose -f docker-compose.yml -f docker-compose.mineru.yml)
-
-retry() {
-  local label="$1"
-  shift
-
-  for attempt in $(seq 1 30); do
-    if "$@" >/dev/null 2>&1; then
-      echo "OK: $label"
-      return 0
-    fi
-
-    if [[ "$attempt" == "30" ]]; then
-      echo "FAILED: $label" >&2
-      "$@"
-      return 1
-    fi
-
-    sleep 2
-  done
-}
-
-up_args=(up -d)
-if [[ "$BUILD" == "1" ]]; then
-  up_args+=(--build)
-else
-  up_args+=(--no-build)
-fi
-
-echo "Starting base services..."
-"${compose_base[@]}" "${up_args[@]}"
-"${compose_base[@]}" restart nginx >/dev/null
-
-if [[ "$WITH_MINERU" == "1" ]]; then
-  mineru_mirror="${MINERU_APT_MIRROR-http://mirrors.aliyun.com/ubuntu}"
-
-  echo "Starting mineru-api..."
-  if [[ "$BUILD" == "1" ]]; then
-    APT_MIRROR="$mineru_mirror" "${compose_mineru[@]}" up -d --build --no-deps mineru-api
+# --- Ensure .env exists ----------------------------------------------------
+if [[ ! -f .env ]]; then
+  if [[ -f .env.example ]]; then
+    echo "⚠️  .env not found — creating it from .env.example"
+    cp .env.example .env
+    echo "   Review .env and set secrets before using this in production."
   else
-    "${compose_mineru[@]}" up -d --no-build --no-deps mineru-api
+    echo "❌ Neither .env nor .env.example found" >&2
+    exit 1
   fi
-
-  echo "Restarting ai-service with MinerU wiring..."
-  "${compose_mineru[@]}" up -d --no-build ai-service
-  "${compose_mineru[@]}" restart nginx >/dev/null
 fi
 
-echo "Current service status:"
-if [[ "$WITH_MINERU" == "1" ]]; then
-  "${compose_mineru[@]}" ps
+NGINX_PORT="$(env_val NGINX_PORT 80)"
+MINIO_CONSOLE_PORT="$(env_val MINIO_CONSOLE_PORT 9001)"
+
+# --- Start the stack -------------------------------------------------------
+echo "🚀 Starting the note-taking system stack (profile: ${STACK_LABEL})"
+if [[ $BUILD -eq 1 ]]; then
+  dc up -d --build
 else
-  "${compose_base[@]}" ps
+  dc up -d
 fi
 
-echo "Running health checks..."
-retry "user-service via nginx" "${compose_base[@]}" exec -T nginx wget -qO- --header 'Host: localhost' http://127.0.0.1/api/user/health
-retry "document-service via nginx" "${compose_base[@]}" exec -T nginx wget -qO- --header 'Host: localhost' http://127.0.0.1/api/doc/health
-retry "ai-service via nginx" "${compose_base[@]}" exec -T nginx wget -qO- --header 'Host: localhost' http://127.0.0.1/api/ai/health
-retry "sync-service via nginx" "${compose_base[@]}" exec -T nginx wget -qO- --header 'Host: localhost' http://127.0.0.1/api/sync/health
-retry "collab-service health" "${compose_base[@]}" exec -T collab-service wget -qO- http://127.0.0.1:3004/health
+# --- Wait for the API gateway to become reachable --------------------------
+echo ""
+echo "⏳ Waiting for the API gateway on port ${NGINX_PORT} ..."
+HEALTH_URL="http://localhost:${NGINX_PORT}/api/user/health"
+ready=0
+for i in $(seq 1 60); do
+  if curl -fsS --max-time 3 "$HEALTH_URL" >/dev/null 2>&1; then
+    ready=1
+    echo "✅ Gateway healthy after ~$((i * 3))s"
+    break
+  fi
+  sleep 3
+done
 
-if [[ "$WITH_MINERU" == "1" ]]; then
-  retry "mineru-api openapi" "${compose_mineru[@]}" exec -T mineru-api python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=10).read()"
-  retry "ai-service to mineru-api" "${compose_mineru[@]}" exec -T ai-service python -c "import os, urllib.request; url=os.environ['MINERU_API_URL']; urllib.request.urlopen(url + '/openapi.json', timeout=10).read()"
+echo ""
+dc ps
+
+if [[ $ready -ne 1 ]]; then
+  echo ""
+  echo "⚠️  Gateway did not answer within ~180s."
+  echo "   Services may still be initializing (databases, AI service build)."
+  echo "   Inspect logs with:  docker compose logs -f"
+  exit 1
 fi
 
-nginx_port="${NGINX_PORT:-}"
-if [[ -z "$nginx_port" && -f .env ]]; then
-  nginx_port="$(sed -n 's/^NGINX_PORT=//p' .env | tail -n 1)"
-fi
-if [[ -z "$nginx_port" || "$nginx_port" == "80" ]]; then
-  frontend_url="http://localhost"
-else
-  frontend_url="http://localhost:$nginx_port"
-fi
+# --- Report access URLs ----------------------------------------------------
+HOST_PORT_SUFFIX=""
+[[ "$NGINX_PORT" != "80" ]] && HOST_PORT_SUFFIX=":${NGINX_PORT}"
 
-echo "All services are ready."
-echo "Frontend: $frontend_url"
-if [[ "$WITH_MINERU" == "1" ]]; then
-  echo "MinerU API docs: http://localhost:${MINERU_API_PORT:-8000}/docs"
+echo ""
+echo "============================================================"
+echo "✅ All services are up."
+echo ""
+echo "  App / API gateway : http://localhost${HOST_PORT_SUFFIX}"
+echo "  MinIO console     : http://localhost:${MINIO_CONSOLE_PORT}"
+echo ""
+echo "  Follow logs       : docker compose logs -f"
+echo "  Stop the stack    : scripts/start-all.sh --down"
+echo "============================================================"
+
+# --- Optionally follow logs ------------------------------------------------
+if [[ $FOLLOW_LOGS -eq 1 ]]; then
+  echo ""
+  echo "📜 Following logs (Ctrl-C to detach; containers keep running)..."
+  dc logs -f
 fi

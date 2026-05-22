@@ -32,11 +32,6 @@ try:
 except ImportError:
     markdown_lib = None
 
-try:
-    import fitz
-except ImportError:
-    fitz = None
-
 ALLOWED_ORIGINS = [
     o.strip()
     for o in getenv("ALLOWED_ORIGINS", "http://localhost,http://localhost:5173,http://localhost:80").split(",")
@@ -81,7 +76,6 @@ EMBEDDING_BASE_URL = getenv("EMBEDDING_BASE_URL", "").strip()
 EMBEDDING_MODEL = getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 LOCAL_EMBEDDING_MODEL = "local-hash-embedding"
 LOCAL_EMBEDDING_DIM = 384
-PDF_PARSE_PROVIDER = getenv("PDF_PARSE_PROVIDER", "mineru").lower()
 MINERU_COMMAND = getenv("MINERU_COMMAND", "mineru")
 MINERU_BACKEND = getenv("MINERU_BACKEND", "pipeline")
 MINERU_LANGUAGE = getenv("MINERU_LANGUAGE", "").strip()
@@ -501,10 +495,11 @@ async def parse_pdf_with_mineru(data: bytes, filename: str) -> dict[str, Any]:
         return await parse_pdf_with_mineru_api(data, filename)
 
     if not shutil.which(MINERU_COMMAND):
-        parsed = parse_pdf_with_pymupdf(data, filename)
-        parsed["fallbackReason"] = f"MinerU command '{MINERU_COMMAND}' was not found."
-        parsed["warnings"] = ["已回退到 PyMuPDF 文本解析，复杂版面、图片、公式和表格还原能力有限。"]
-        return parsed
+        raise RuntimeError(
+            f"MinerU command '{MINERU_COMMAND}' was not found. "
+            "Set MINERU_API_URL to a running mineru-api service, "
+            "install MinerU locally, or set MINERU_COMMAND."
+        )
 
     safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", filename or "document.pdf")
     if not safe_name.lower().endswith(".pdf"):
@@ -629,60 +624,8 @@ async def parse_pdf_with_mineru_api(data: bytes, filename: str) -> dict[str, Any
     }
 
 
-def parse_pdf_with_pymupdf(data: bytes, filename: str) -> dict[str, Any]:
-    if fitz is None:
-        raise RuntimeError(
-            f"MinerU command '{MINERU_COMMAND}' was not found and PyMuPDF is not installed. "
-            "Install PyMuPDF, set MINERU_API_URL to a running mineru-api service, "
-            "install MinerU, or set MINERU_COMMAND."
-        )
-
-    try:
-        document = fitz.open(stream=data, filetype="pdf")
-    except Exception as error:
-        raise RuntimeError(f"PyMuPDF failed to open PDF: {error}") from error
-
-    try:
-        markdown_parts: list[str] = []
-        text_parts: list[str] = []
-        page_count = document.page_count
-        metadata = document.metadata or {}
-        title = normalize_text(metadata.get("title") or "") or Path(filename or "PDF 笔记").stem
-        if title:
-            markdown_parts.append(f"# {title}")
-
-        for page_index, page in enumerate(document, start=1):
-            page_text = normalize_text(page.get_text("text"))
-            if not page_text:
-                continue
-
-            markdown_parts.append(f"## 第 {page_index} 页\n\n{page_text}")
-            text_parts.append(page_text)
-    finally:
-        document.close()
-
-    text = normalize_text("\n\n".join(text_parts))
-    markdown = "\n\n".join(markdown_parts).strip()
-    if not markdown:
-        markdown = "# PDF 笔记\n\n未能从该 PDF 中提取到可用文本。"
-
-    return {
-        "parser": "pymupdf",
-        "pages": page_count,
-        "text": text,
-        "markdown": markdown,
-        "assets": [],
-        "warnings": [],
-    }
-
-
 async def parse_pdf_document(data: bytes, filename: str) -> dict[str, Any]:
-    if PDF_PARSE_PROVIDER == "mineru":
-        return await parse_pdf_with_mineru(data, filename)
-    if PDF_PARSE_PROVIDER == "pymupdf":
-        return parse_pdf_with_pymupdf(data, filename)
-
-    raise HTTPException(status_code=400, detail="PDF_PARSE_PROVIDER must be mineru or pymupdf.")
+    return await parse_pdf_with_mineru(data, filename)
 
 
 async def search_chunks(query: str, document_id: Optional[str], note_id: Optional[str]) -> list[dict[str, Any]]:
@@ -809,7 +752,6 @@ def health():
         "status": "ok",
         "provider": provider_name(),
         "model": ai_model_name(provider_name()),
-        "pdfParseProvider": PDF_PARSE_PROVIDER,
         "mineruBackend": MINERU_BACKEND,
         "chromaCollection": CHROMA_COLLECTION,
         "embeddingModel": EMBEDDING_MODEL,

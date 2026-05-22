@@ -14,7 +14,7 @@ AI-enhanced collaborative Markdown note-taking system. Monorepo with npm workspa
 - **document-service** (3002): MongoDB, MinIO (object storage), multer
 - **collab-service** (3004): WebSocket (ws), Yjs, MongoDB, Redis
 - **sync-service** (3005): MongoDB, offline push/pull with conflict detection
-- **ai-service** (3003): Python FastAPI, PyMuPDF, MinerU (optional), LlamaIndex + Chroma (RAG), SSE streaming
+- **ai-service** (3003): Python FastAPI, MinerU (required for PDF parsing), LlamaIndex + Chroma (RAG), SSE streaming
 - **Infra**: MySQL 8.4, MongoDB 6, Redis 7, MinIO, Nginx
 - **E2E**: Playwright (Chromium, Firefox, WebKit)
 
@@ -114,7 +114,7 @@ Copy `.env.example` to `.env`. Key variables:
 
 - `JWT_SECRET` — shared across services, must change in production
 - `AI_PROVIDER` — `mock` (default) / `deepseek` / `openai` / `xiaomi`
-- `PDF_PARSE_PROVIDER` — `mineru` (default) / `pymupdf`
+- `MINERU_API_URL` — required for PDF parsing unless the `mineru` CLI is installed in the ai-service image
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — Google OAuth (optional)
 - `SMTP_*` — Email verification (optional)
 - `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` — Embedding model for Chroma (falls back to local deterministic embedding if empty)
@@ -135,5 +135,5 @@ Copy `.env.example` to `.env`. Key variables:
 ## Current Limitations
 
 - AI defaults to `mock` provider (no real LLM calls without configuration).
-- PyMuPDF fallback does basic text extraction only (limited layout/formula/table support).
+- PDF parsing requires MinerU (`MINERU_API_URL` or the `mineru` CLI inside the ai-service image). There is no lightweight fallback.
 - Offline sync covers note CRUD only, not full CRDT offline merge.

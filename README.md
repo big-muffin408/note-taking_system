@@ -64,7 +64,7 @@ docker compose ps
 - 前端与网关：http://localhost
 - MinIO 控制台：http://localhost:9001
 
-默认 `AI_PROVIDER=mock`，没有外部 API Key 也能演示摘要、问答和润色。默认 `PDF_PARSE_PROVIDER=mineru`，如果没有配置 `MINERU_API_URL` 且镜像内没有 `mineru` 命令，会自动回退到 PyMuPDF 文本解析。
+默认 `AI_PROVIDER=mock`，没有外部 API Key 也能演示摘要、问答和润色。PDF 解析强制使用 MinerU，需要配置 `MINERU_API_URL` 指向运行中的 mineru-api 服务，或在镜像内安装 `mineru` 命令；否则上传 PDF 会直接返回错误。
 
 常用健康检查：
 
@@ -176,7 +176,6 @@ docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 `.env.example` 已给出本机演示的保守默认值：
 
 ```env
-PDF_PARSE_PROVIDER=mineru
 MINERU_BACKEND=pipeline
 MINERU_LANGUAGE=ch
 MINERU_TIMEOUT_SECONDS=1200
@@ -192,7 +191,7 @@ docker compose ps
 docker compose exec -T ai-service env | grep MINERU
 ```
 
-使用 `docker-compose.mineru.yml` 时，`ai-service` 会通过 `MINERU_API_URL=http://mineru-api:8000` 调用独立 MinerU API。上传 PDF 后返回的 `parser` 应为 `mineru-api`；如果是 `pymupdf`，说明当前走的是轻量回退链路。
+使用 `docker-compose.mineru.yml` 时，`ai-service` 会通过 `MINERU_API_URL=http://mineru-api:8000` 调用独立 MinerU API。上传 PDF 后返回的 `parser` 应为 `mineru-api`；如果返回错误，说明 MinerU 未就绪，需要排查 mineru-api 容器状态。
 
 如果构建时 `apt-get install` 遇到临时 `502 Bad Gateway`，可以使用镜像源重新构建：
 
@@ -311,8 +310,7 @@ docker compose -f docker-compose.yml -f docker-compose.mineru.yml build --build-
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `MAIL_FROM` | 邮箱验证码发信配置 |
 | `AI_PROVIDER` | `mock` / `openai` / `deepseek` / `xiaomi` |
 | `AI_API_KEY` / `AI_MODEL` / `AI_BASE_URL` | OpenAI-compatible 模型配置 |
-| `PDF_PARSE_PROVIDER` | `mineru` 或 `pymupdf` |
-| `MINERU_API_URL` | 外部或 compose 内 MinerU API 地址 |
+| `MINERU_API_URL` | 外部或 compose 内 MinerU API 地址（PDF 解析必需） |
 | `MINERU_MODEL_SOURCE` | MinerU 模型来源，默认 `modelscope` |
 | `MINIO_BUCKET` | PDF 原文件存储桶 |
 
@@ -363,8 +361,8 @@ npm audit --offline
 
 - 前端上传 PDF 默认走 `/api/doc/pdf/jobs`，返回 `202` 和 `jobId` 后轮询 `/api/doc/pdf/jobs/:jobId`。状态应从 `queued` 进入 `parsing`，最后变为 `parsed` 或 `failed`。
 - 如果任务长时间停在 `queued`，优先看 `document-service` 日志和后台 worker 是否启动；测试环境会通过 `DISABLE_PDF_JOB_WORKER=true` 主动关闭 worker。
-- 如果任务停在 `parsing` 后失败，查看任务返回的 `error`、`ai-service` 日志和 `/api/ai/health` 中的 `pdfParseProvider`、`mineruApiUrl`。
-- `parser=pymupdf` 表示当前走轻量回退链路；需要高质量版面、图片、公式时，应启动 MinerU API 并确认上传结果展示 `parser=mineru-api`。
+- 如果任务停在 `parsing` 后失败，查看任务返回的 `error`、`ai-service` 日志和 `/api/ai/health` 中的 `mineruBackend`、`mineruApiUrl`。
+- 返回的 `parser` 应为 `mineru` 或 `mineru-api`；如果上传直接报错并提示 "MinerU command ... was not found"，说明 ai-service 既找不到本地 `mineru` 命令也未配置 `MINERU_API_URL`，需要启动 MinerU API 或安装 MinerU。
 - 只有 `failed` 状态任务可以调用 `/api/doc/pdf/jobs/:jobId/retry`。重试会复用 MinIO 中的原始 PDF，不要求用户重新选择文件。
 
 ## 当前代码分析摘要

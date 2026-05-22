@@ -13,7 +13,7 @@ ENV UV_LINK_MODE=copy
 ENTRYPOINT []
 
 RUN if [ -n "$APT_MIRROR" ]; then \
-      sed -i "s|http://archive.ubuntu.com/ubuntu|$APT_MIRROR|g; s|http://security.ubuntu.com/ubuntu|$APT_MIRROR|g" /etc/apt/sources.list; \
+      sed -i "s|http://archive.ubuntu.com/ubuntu|${APT_MIRROR}/ubuntu|g; s|http://security.ubuntu.com/ubuntu|${APT_MIRROR}/ubuntu|g" /etc/apt/sources.list; \
     fi \
     && printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries \
     && apt-get update \

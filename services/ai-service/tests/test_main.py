@@ -2,7 +2,6 @@ import os
 
 # Ensure mock provider for tests
 os.environ.setdefault("AI_PROVIDER", "mock")
-os.environ.setdefault("PDF_PARSE_PROVIDER", "pymupdf")
 os.environ.setdefault("CHROMA_PERSIST_DIR", "/tmp/test_chroma_data")
 
 import pytest

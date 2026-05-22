@@ -12,7 +12,12 @@ let cached: AppConfig | null = null;
 let loading: Promise<AppConfig> | null = null;
 
 async function loadFromElectron(): Promise<AppConfig> {
-  if (!window.electronAPI) return { apiBaseUrl: '', wsBaseUrl: '' };
+  if (!window.electronAPI) {
+    return {
+      apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? '',
+      wsBaseUrl: import.meta.env.VITE_WS_BASE_URL ?? '/ws',
+    };
+  }
   return window.electronAPI.getConfig();
 }
 
