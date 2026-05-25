@@ -21,3 +21,5 @@ tmp/
 .DS_Store
 out-electron/
 release/
+CLAUDE.md
+.codex

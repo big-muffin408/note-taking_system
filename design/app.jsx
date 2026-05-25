@@ -39,6 +39,33 @@ const Icon = {
   Tag: () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><path d="M2 8.5V2.5h6L14 8.5l-5.5 5.5z"/><circle cx="5" cy="5.5" r=".8" fill="currentColor"/></svg>,
 };
 
+// ---------- Brand mark (Quire · 集册) ----------
+// Refined Ink-slab logo: italic Q in a dark slab with a folded page corner.
+function BrandMark({ size = 28, radius }) {
+  const r = radius != null ? radius : Math.round(size * 0.22);
+  const fold = size * 0.22;
+  const id = `qclip-${size}`;
+  return (
+    <svg viewBox="0 0 132 132" width={size} height={size} aria-label="Quire" style={{display:'block'}}>
+      <defs>
+        <clipPath id={id}><rect width="132" height="132" rx={r * 132 / size}/></clipPath>
+      </defs>
+      <g clipPath={`url(#${id})`}>
+        <rect width="132" height="132" rx={r * 132 / size} fill="var(--ink)"/>
+        <text x="66" y="100" textAnchor="middle"
+              fontFamily="Newsreader, Georgia, 'Times New Roman', serif"
+              fontStyle="italic" fontWeight="400"
+              fontSize="112" fill="var(--paper)"
+              style={{letterSpacing:'-0.04em'}}>Q</text>
+        {size >= 22 && (<>
+          <path d="M132 102 L132 132 L102 132 Z" fill="var(--paper-2)"/>
+          <path d="M102 132 L132 102" stroke="var(--ink)" strokeWidth="1.2" opacity="0.45"/>
+        </>)}
+      </g>
+    </svg>
+  );
+}
+
 // ============================================================
 // SAMPLE DATA
 // ============================================================
@@ -90,8 +117,8 @@ function Sidebar({ filter, setFilter }) {
     <aside className="sidebar" data-screen-label="sidebar">
       <div className="sidebar-top">
         <div className="brand">
-          <div className="brand-mark">N</div>
-          <div className="brand-name">Notebook <em>by Muffin</em></div>
+          <div className="brand-mark"><BrandMark size={28}/></div>
+          <div className="brand-name">Quire <em>· 集册</em></div>
         </div>
         <div className="sidebar-actions">
           <button className="btn-new"><Icon.Plus /> 新建笔记</button>
@@ -326,7 +353,7 @@ function AIPanel({ onClose }) {
           </div>
           {messages.map((m, i) => (
             <div key={i} className={`chat-msg ${m.who}`}>
-              <div className="who">{m.who === 'user' ? '你' : 'Notebook AI'}</div>
+              <div className="who">{m.who === 'user' ? '你' : 'Quire AI'}</div>
               <div className={`bubble${m.streaming ? ' cursor-blink' : ''}`}>
                 {m.text}
                 {m.cite && !m.streaming && m.cite.map(c => <span key={c} className="cite">{c}</span>)}
@@ -472,7 +499,7 @@ function ShareModal({ onClose }) {
             <div style={{display:'grid',placeItems:'center',width:28,height:28,borderRadius:6,background:'var(--paper)',border:'1px solid var(--line)'}}>
               <Icon.Link/>
             </div>
-            <div className="url">notebook.muffin.app/n/3f8c2a9b · 仅受邀可访问</div>
+            <div className="url">quire.app/n/3f8c2a9b · 仅受邀可访问</div>
             <button className="btn-secondary" style={{height:30,padding:'0 10px',fontSize:12}}><Icon.Copy/> 复制</button>
           </div>
         </div>
@@ -636,8 +663,8 @@ function LoginScreen({ onLogin }) {
     <div className="auth-page" data-screen-label="login">
       <div className="auth-art">
         <div className="brand" style={{padding:0}}>
-          <div className="brand-mark">N</div>
-          <div className="brand-name">Notebook <em>by Muffin</em></div>
+          <div className="brand-mark"><BrandMark size={28}/></div>
+          <div className="brand-name">Quire <em>· 集册</em></div>
         </div>
         <div>
           <div className="quote">

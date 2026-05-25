@@ -46,6 +46,8 @@ interface EditorProps {
   title?: string;
   /** Called when the title input changes */
   onTitleChange?: (value: string) => void;
+  /** Optional node rendered between title and editor body (meta line). */
+  metaSlot?: React.ReactNode;
 }
 
 const lowlight = createLowlight(common);
@@ -55,7 +57,7 @@ function hasMeaningfulContent(content: string) {
   return compact.length > 0 || /<(h[1-6]|ul|ol|li|blockquote|pre|img|hr)\b/i.test(content);
 }
 
-export default function Editor({ content, onUpdate, editable = true, readingMode = false, insertRequest, collaboration, onSelectionChange, floatingToolbar, contentKey, onImageUpload, title, onTitleChange }: EditorProps) {
+export default function Editor({ content, onUpdate, editable = true, readingMode = false, insertRequest, collaboration, onSelectionChange, floatingToolbar, contentKey, onImageUpload, title, onTitleChange, metaSlot }: EditorProps) {
   const initialized = useRef(false);
   const lastInsertRequest = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -357,6 +359,7 @@ export default function Editor({ content, onUpdate, editable = true, readingMode
               readOnly={readingMode}
             />
           )}
+          {metaSlot}
           <EditorContent editor={editor} className="editor-content" />
         </div>
       </div>

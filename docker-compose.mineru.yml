@@ -14,6 +14,7 @@ services:
       dockerfile: Dockerfile
       args:
         APT_MIRROR: ${APT_MIRROR:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
         VLLM_BASE_IMAGE: ${MINERU_VLLM_BASE_IMAGE:-vllm/vllm-openai:v0.8.5}
         MINERU_VERSION: ${MINERU_VERSION:-3.1.4}
         MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-modelscope}

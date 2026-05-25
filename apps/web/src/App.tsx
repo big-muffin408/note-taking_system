@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { NotesProvider } from './contexts/NotesContext';
+import { AiPanelProvider } from './contexts/AiPanelContext';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import OAuthCallbackPage from './pages/OAuthCallbackPage';
@@ -142,7 +143,9 @@ export default function App() {
             element={
               <RequireAuth>
                 <NotesProvider>
-                  <MainLayout />
+                  <AiPanelProvider>
+                    <MainLayout />
+                  </AiPanelProvider>
                 </NotesProvider>
               </RequireAuth>
             }

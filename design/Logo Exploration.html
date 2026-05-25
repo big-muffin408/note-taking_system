@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quire · Logo Exploration</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* Page chrome */
+    body { background: oklch(0.96 0.008 80); }
+
+    .lx-art {
+      width: 100%;
+      height: 100%;
+      background: var(--paper);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .lx-art.dark {
+      background: oklch(0.20 0.010 70);
+      --paper: oklch(0.20 0.010 70);
+      --ink: oklch(0.96 0.010 80);
+      --ink-3: oklch(0.66 0.010 80);
+      --ink-4: oklch(0.52 0.010 80);
+      --line: oklch(0.30 0.012 70);
+      --accent: oklch(0.74 0.10 250);
+    }
+
+    .lx-header {
+      padding: 18px 22px 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .lx-art.dark .lx-header { border-color: var(--line); }
+    .lx-tag {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-4);
+    }
+    .lx-num {
+      font-family: var(--serif);
+      font-style: italic;
+      font-size: 13px;
+      color: var(--ink-3);
+    }
+
+    /* the main hero — logo at large size */
+    .lx-hero {
+      flex: 1;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+
+    .lx-foot {
+      border-top: 1px solid var(--line-soft);
+      padding: 14px 22px;
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+    .lx-art.dark .lx-foot { border-color: var(--line); }
+    .lx-foot .label {
+      font-family: var(--mono);
+      font-size: 9.5px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--ink-4);
+      margin-bottom: 6px;
+    }
+    .lx-foot .cell { display: flex; flex-direction: column; gap: 4px; }
+
+    /* shared glyphs */
+    .swatch-row { display: flex; gap: 6px; }
+    .swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line); }
+
+    .micro {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-family: var(--serif); font-size: 12px; color: var(--ink);
+    }
+    .micro .m-glyph { display: grid; place-items: center; }
+
+    /* ============== LOGO MARKS ==============
+       All logos are sized at ~140px height in hero. */
+
+    /* 1. Quire mark — italic Q with descender as page corner */
+    .logo-1 .mark {
+      width: 132px; height: 132px;
+      background: var(--ink);
+      color: var(--paper);
+      border-radius: 22px;
+      display: grid; place-items: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .logo-1 .mark::after {
+      /* folded corner */
+      content: "";
+      position: absolute;
+      bottom: 0; right: 0;
+      width: 28px; height: 28px;
+      background: linear-gradient(135deg, transparent 50%, var(--paper-2) 50%);
+      border-top-left-radius: 6px;
+    }
+    .logo-1 .mark .q {
+      font-family: var(--serif);
+      font-style: italic;
+      font-size: 96px;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.04em;
+      transform: translate(-2px, -4px);
+    }
+
+    /* 2. Folded sheets — stacked pages forming a "quire" */
+    .logo-2 .mark {
+      width: 140px; height: 140px;
+      display: grid; place-items: center;
+      position: relative;
+    }
+
+    /* 3. Margin rule + italic glyph (echoes editor blockquote accent) */
+    .logo-3 .mark {
+      display: flex; align-items: stretch; gap: 14px;
+      height: 132px;
+    }
+    .logo-3 .rule {
+      width: 4px; background: var(--accent); border-radius: 2px;
+    }
+    .logo-3 .word {
+      font-family: var(--serif);
+      font-style: italic;
+      font-size: 92px;
+      line-height: 1;
+      font-weight: 500;
+      letter-spacing: -0.025em;
+      color: var(--ink);
+      display: grid;
+      align-content: center;
+    }
+    .logo-3 .word .sub {
+      font-family: var(--mono);
+      font-style: normal;
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      color: var(--ink-4);
+      text-transform: uppercase;
+      margin-top: 8px;
+    }
+
+    /* 4. Ligature — Qu monogram in a rounded "stamp" */
+    .logo-4 .mark {
+      width: 144px; height: 144px;
+      border: 1.5px solid var(--ink);
+      border-radius: 50%;
+      display: grid; place-items: center;
+      position: relative;
+      color: var(--ink);
+    }
+    .logo-4 .mark .qu {
+      font-family: var(--serif);
+      font-style: italic;
+      font-weight: 500;
+      font-size: 70px;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      transform: translateY(-2px);
+    }
+    .logo-4 .ringtxt {
+      position: absolute;
+      width: 100%; height: 100%;
+      animation: none;
+    }
+
+    /* 5. Sparkle + Q — AI-coauthor flavor */
+    .logo-5 .mark {
+      width: 150px; height: 144px;
+      position: relative;
+      display: grid; place-items: center;
+      color: var(--ink);
+    }
+    .logo-5 .q {
+      font-family: var(--serif);
+      font-style: italic;
+      font-size: 132px;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    /* Compact / lockup row */
+    .lockup {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .lockup .lo-mark {
+      width: 26px; height: 26px;
+      background: var(--ink);
+      color: var(--paper);
+      border-radius: 6px;
+      display: grid; place-items: center;
+      font-family: var(--serif); font-style: italic; font-size: 16px;
+      font-weight: 500;
+    }
+    .lockup .lo-name {
+      font-family: var(--serif);
+      font-size: 17px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+    .lockup .lo-name em {
+      font-style: italic; color: var(--ink-3); font-weight: 400;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="design-canvas.jsx"></script>
+
+  <script type="text/babel">
+    const { useState } = React;
+
+    // ============ Five logo concepts ============
+
+    function Logo1({ size = 132 }) {
+      // Ink slab with italic Q + folded corner
+      return (
+        <svg viewBox="0 0 132 132" width={size} height={size} style={{display:'block'}}>
+          <defs>
+            <clipPath id="l1clip"><rect x="0" y="0" width="132" height="132" rx="22"/></clipPath>
+          </defs>
+          <g clipPath="url(#l1clip)">
+            <rect x="0" y="0" width="132" height="132" rx="22" fill="var(--ink)"/>
+            <text x="66" y="98" textAnchor="middle"
+                  fontFamily="Newsreader, Georgia, serif"
+                  fontStyle="italic" fontWeight="400"
+                  fontSize="108" fill="var(--paper)"
+                  letterSpacing="-0.04em">Q</text>
+            {/* folded corner */}
+            <path d="M132,104 L132,132 L104,132 Z" fill="var(--paper-2)" opacity="0.95"/>
+            <path d="M132,104 L104,132" stroke="var(--ink)" strokeWidth="1" opacity="0.5"/>
+            <path d="M104,132 L132,132 L132,104" fill="none" />
+            <path d="M104,132 L104,118 L118,118 L118,104 L132,104"
+                  stroke="var(--paper-2)" strokeWidth="1" fill="none" opacity="0"/>
+          </g>
+        </svg>
+      );
+    }
+
+    function Logo2({ size = 140 }) {
+      // Stacked folded pages forming a "quire"
+      return (
+        <svg viewBox="0 0 140 140" width={size} height={size} style={{display:'block'}}>
+          {/* back sheet */}
+          <path d="M28 38 L96 30 L108 100 L42 110 Z"
+                fill="var(--paper-2)" stroke="var(--ink)" strokeWidth="1.2"/>
+          {/* middle sheet */}
+          <path d="M22 46 L90 42 L98 112 L30 116 Z"
+                fill="var(--paper)" stroke="var(--ink)" strokeWidth="1.2"/>
+          {/* top sheet with folded corner */}
+          <path d="M18 52 L86 54 L86 116 L72 130 L26 124 Z"
+                fill="var(--paper)" stroke="var(--ink)" strokeWidth="1.4"/>
+          <path d="M86 116 L72 116 L72 130 Z"
+                fill="var(--paper-3)" stroke="var(--ink)" strokeWidth="1.2"/>
+          {/* italic Q on top sheet */}
+          <text x="52" y="100" textAnchor="middle"
+                fontFamily="Newsreader, Georgia, serif"
+                fontStyle="italic" fontWeight="500"
+                fontSize="56" fill="var(--ink)" letterSpacing="-0.03em">Q</text>
+          {/* sparkle accent */}
+          <g transform="translate(98 36)" fill="var(--accent)">
+            <path d="M0,-6 L1.3,-1.3 L6,0 L1.3,1.3 L0,6 L-1.3,1.3 L-6,0 L-1.3,-1.3 Z"/>
+          </g>
+        </svg>
+      );
+    }
+
+    function Logo3() {
+      // Margin rule + italic wordmark — like editor blockquote
+      return (
+        <div className="logo-3">
+          <div className="mark">
+            <div className="rule"></div>
+            <div className="word">
+              Quire
+              <div className="sub">集册 · since now</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Logo4({ size = 144 }) {
+      // Circular stamp with Qu ligature + ring text
+      const r = 64;
+      const cx = 72, cy = 72;
+      return (
+        <svg viewBox="0 0 144 144" width={size} height={size} style={{display:'block'}}>
+          <defs>
+            <path id="ring4"
+                  d={`M ${cx-r+8},${cy} a ${r-8},${r-8} 0 1,1 ${(r-8)*2},0 a ${r-8},${r-8} 0 1,1 -${(r-8)*2},0`} />
+          </defs>
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--ink)" strokeWidth="1.4"/>
+          <circle cx={cx} cy={cy} r={r-8} fill="none" stroke="var(--ink)" strokeWidth="0.7" opacity="0.35"/>
+          <text fontFamily="IBM Plex Mono, monospace"
+                fontSize="9" fill="var(--ink-3)" letterSpacing="0.32em">
+            <textPath href="#ring4" startOffset="2%">QUIRE · NOTEBOOK · QUIRE · COLLAB ·</textPath>
+          </text>
+          <text x={cx} y={cy+18} textAnchor="middle"
+                fontFamily="Newsreader, Georgia, serif"
+                fontStyle="italic" fontWeight="500"
+                fontSize="58" fill="var(--ink)" letterSpacing="-0.04em">Qu</text>
+          {/* tiny page corner */}
+          <path d={`M ${cx-2},${cy+24} l 16,0 l 0,12 l -8,8 l -8,0 z`}
+                fill="none" stroke="var(--ink-3)" strokeWidth="0.8"/>
+        </svg>
+      );
+    }
+
+    function Logo5({ size = 160 }) {
+      // Italic Q with AI sparkle in the descender bowl
+      return (
+        <svg viewBox="0 0 160 144" width={size} height={size*144/160} style={{display:'block'}}>
+          <text x="14" y="118"
+                fontFamily="Newsreader, Georgia, serif"
+                fontStyle="italic" fontWeight="400"
+                fontSize="148" fill="var(--ink)" letterSpacing="-0.04em">Q</text>
+          {/* sparkle accent at descender */}
+          <g transform="translate(108 102)">
+            <path d="M0,-9 L2,-2 L9,0 L2,2 L0,9 L-2,2 L-9,0 L-2,-2 Z"
+                  fill="var(--accent)"/>
+            <path d="M0,-4.5 L1,-1 L4.5,0 L1,1 L0,4.5 L-1,1 L-4.5,0 L-1,-1 Z"
+                  fill="var(--paper)" opacity="0.85"/>
+          </g>
+          {/* underline rule */}
+          <line x1="14" y1="132" x2="146" y2="132" stroke="var(--ink-3)" strokeWidth="0.8" opacity="0.4"/>
+        </svg>
+      );
+    }
+
+    // ============ Artboard wrapper ============
+
+    function Artboard({ n, name, sub, dark, children, footnote }) {
+      return (
+        <div className={"lx-art" + (dark ? " dark" : "")}>
+          <div className="lx-header">
+            <span className="lx-tag">Option {n.toString().padStart(2,'0')}</span>
+            <span className="lx-num">{name}</span>
+          </div>
+          <div className="lx-hero">{children}</div>
+          <div className="lx-foot">
+            <div className="cell">
+              <div className="label">Lockup</div>
+              <div className="lockup">
+                <div className="lo-mark">Q</div>
+                <div className="lo-name">Quire <em>· 集册</em></div>
+              </div>
+            </div>
+            <div className="cell">
+              <div className="label">Idea</div>
+              <div style={{fontSize:12, color:'var(--ink-3)', maxWidth:260}}>{sub}</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ============ Canvas ============
+
+    const ART_W = 460;
+    const ART_H = 360;
+
+    function App() {
+      return (
+        <DesignCanvas
+          title="Quire · 集册"
+          subtitle="Logo exploration · 5 directions, light + dark"
+          initialZoom={0.7}>
+
+          <DCSection id="intro" title="Naming">
+            <DCArtboard id="intro-card" label="Why “Quire”" width={760} height={360}>
+              <div style={{padding:'36px 44px', fontFamily:'var(--serif)', color:'var(--ink)', height:'100%', display:'flex', flexDirection:'column', justifyContent:'center', background:'var(--paper)'}}>
+                <div style={{fontFamily:'var(--mono)', fontSize:11, letterSpacing:'0.12em', textTransform:'uppercase', color:'var(--ink-4)', marginBottom:14}}>Project name</div>
+                <h1 style={{fontFamily:'var(--serif)', fontStyle:'italic', fontSize:72, fontWeight:500, margin:'0 0 8px', letterSpacing:'-0.02em', lineHeight:1.05}}>
+                  Quire <span style={{color:'var(--accent)', fontStyle:'italic'}}>集册</span>
+                </h1>
+                <div style={{fontFamily:'var(--mono)', fontSize:12, color:'var(--ink-3)', marginBottom:18}}>/kwaɪər/ · n. a gathering of folded sheets bound together</div>
+                <p style={{fontSize:15, lineHeight:1.55, color:'var(--ink-2)', margin:0, maxWidth:560}}>
+                  装订术语，指一沓折叠成册的纸 — 既是<em>笔记本</em>本身，也暗喻多人「集思成册」的协作。
+                  字母 Q 的斜体尾钩与现有 Newsreader italic 系统天然契合。
+                </p>
+              </div>
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection id="marks" title="Logo Marks · Light">
+            <DCArtboard id="m1" label="01 · Ink slab" width={ART_W} height={ART_H}>
+              <Artboard n={1} name="Ink slab" sub="App-icon flavored. 实心墨块 + 斜体 Q + 折角 — 与现有 brand-mark 一脉相承，是最稳的方向。">
+                <Logo1 size={156}/>
+              </Artboard>
+            </DCArtboard>
+
+            <DCArtboard id="m2" label="02 · Quire stack" width={ART_W} height={ART_H}>
+              <Artboard n={2} name="Quire stack" sub="叠合的三页纸字面化「quire」一词。带 AI 火花点，最有叙事感。">
+                <Logo2 size={170}/>
+              </Artboard>
+            </DCArtboard>
+
+            <DCArtboard id="m3" label="03 · Margin rule" width={ART_W} height={ART_H}>
+              <Artboard n={3} name="Margin rule" sub="直接复用编辑器内 blockquote 的强调线，作为品牌主图形。极简文字商标。">
+                <Logo3 />
+              </Artboard>
+            </DCArtboard>
+
+            <DCArtboard id="m4" label="04 · Stamp" width={ART_W} height={ART_H}>
+              <Artboard n={4} name="Stamp / Seal" sub="圆形印章，环绕等宽字。带学术 / 出版物的可信气质，适合做加载动画。">
+                <Logo4 size={170}/>
+              </Artboard>
+            </DCArtboard>
+
+            <DCArtboard id="m5" label="05 · Italic Q + spark" width={ART_W} height={ART_H}>
+              <Artboard n={5} name="Italic Q + spark" sub="单字母图章。AI 火花停在 Q 的尾钩处 — 最直接体现「AI 协作」。">
+                <Logo5 size={186}/>
+              </Artboard>
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection id="marks-dark" title="Logo Marks · Dark">
+            <DCArtboard id="m1d" label="01 · Ink slab" width={ART_W} height={ART_H}>
+              <Artboard n={1} name="Ink slab" dark sub="深色模式下墨块反相，折角变浅。">
+                <Logo1 size={156}/>
+              </Artboard>
+            </DCArtboard>
+            <DCArtboard id="m2d" label="02 · Quire stack" width={ART_W} height={ART_H}>
+              <Artboard n={2} name="Quire stack" dark sub="深色背景下叠页对比更安静。">
+                <Logo2 size={170}/>
+              </Artboard>
+            </DCArtboard>
+            <DCArtboard id="m3d" label="03 · Margin rule" width={ART_W} height={ART_H}>
+              <Artboard n={3} name="Margin rule" dark sub="">
+                <Logo3 />
+              </Artboard>
+            </DCArtboard>
+            <DCArtboard id="m4d" label="04 · Stamp" width={ART_W} height={ART_H}>
+              <Artboard n={4} name="Stamp / Seal" dark sub="">
+                <Logo4 size={170}/>
+              </Artboard>
+            </DCArtboard>
+            <DCArtboard id="m5d" label="05 · Italic Q + spark" width={ART_W} height={ART_H}>
+              <Artboard n={5} name="Italic Q + spark" dark sub="">
+                <Logo5 size={186}/>
+              </Artboard>
+            </DCArtboard>
+          </DCSection>
+
+          <DCSection id="apps" title="In Context">
+            <DCArtboard id="app-sidebar" label="Sidebar brand" width={320} height={120}>
+              <div style={{padding:'20px 22px', background:'var(--paper-2)', height:'100%', borderRight:'1px solid var(--line)', display:'flex', alignItems:'center', gap:12}}>
+                <svg viewBox="0 0 132 132" width="36" height="36">
+                  <defs><clipPath id="lbsm"><rect x="0" y="0" width="132" height="132" rx="22"/></clipPath></defs>
+                  <g clipPath="url(#lbsm)">
+                    <rect x="0" y="0" width="132" height="132" rx="22" fill="var(--ink)"/>
+                    <text x="66" y="98" textAnchor="middle" fontFamily="Newsreader, Georgia, serif" fontStyle="italic" fontWeight="400" fontSize="108" fill="var(--paper)" letterSpacing="-0.04em">Q</text>
+                    <path d="M132,104 L132,132 L104,132 Z" fill="var(--paper-2)"/>
+                  </g>
+                </svg>
+                <div>
+                  <div style={{fontFamily:'var(--serif)', fontSize:20, fontWeight:500, letterSpacing:'-0.01em', color:'var(--ink)'}}>
+                    Quire <span style={{fontStyle:'italic', color:'var(--ink-3)', fontWeight:400}}>· 集册</span>
+                  </div>
+                  <div style={{fontFamily:'var(--mono)', fontSize:10, color:'var(--ink-4)', letterSpacing:'0.08em', marginTop:2}}>AI · COLLAB · NOTES</div>
+                </div>
+              </div>
+            </DCArtboard>
+
+            <DCArtboard id="app-favicon" label="Favicon scales" width={320} height={120}>
+              <div style={{padding:'18px 22px', background:'var(--paper)', height:'100%', display:'flex', alignItems:'center', gap:18}}>
+                {[16, 24, 32, 48, 64].map(s => (
+                  <div key={s} style={{display:'flex', flexDirection:'column', alignItems:'center', gap:6}}>
+                    <svg viewBox="0 0 132 132" width={s} height={s}>
+                      <rect x="0" y="0" width="132" height="132" rx={s>=32?22:14} fill="var(--ink)"/>
+                      <text x="66" y="98" textAnchor="middle" fontFamily="Newsreader, Georgia, serif" fontStyle="italic" fontWeight="400" fontSize="108" fill="var(--paper)" letterSpacing="-0.04em">Q</text>
+                    </svg>
+                    <div style={{fontFamily:'var(--mono)', fontSize:9, color:'var(--ink-4)'}}>{s}</div>
+                  </div>
+                ))}
+              </div>
+            </DCArtboard>
+
+            <DCArtboard id="app-login" label="On login page" width={460} height={260}>
+              <div style={{background:'var(--paper-2)', height:'100%', padding:'40px 36px', display:'flex', flexDirection:'column', justifyContent:'space-between', position:'relative', overflow:'hidden'}}>
+                <div style={{position:'absolute', top:'-40%', right:'-10%', width:'60%', height:'80%', background:'radial-gradient(circle, var(--accent-soft) 0%, transparent 60%)', opacity:0.5}}></div>
+                <div style={{position:'relative', display:'flex', alignItems:'center', gap:12}}>
+                  <svg viewBox="0 0 132 132" width="40" height="40">
+                    <rect x="0" y="0" width="132" height="132" rx="22" fill="var(--ink)"/>
+                    <text x="66" y="98" textAnchor="middle" fontFamily="Newsreader, Georgia, serif" fontStyle="italic" fontWeight="400" fontSize="108" fill="var(--paper)" letterSpacing="-0.04em">Q</text>
+                    <path d="M132,104 L132,132 L104,132 Z" fill="var(--paper-2)"/>
+                  </svg>
+                  <div style={{fontFamily:'var(--serif)', fontSize:24, fontWeight:500, letterSpacing:'-0.015em'}}>Quire <em style={{color:'var(--ink-3)', fontWeight:400}}>· 集册</em></div>
+                </div>
+                <div style={{position:'relative'}}>
+                  <div style={{fontFamily:'var(--serif)', fontStyle:'italic', fontSize:24, lineHeight:1.25, color:'var(--ink)', maxWidth:340}}>
+                    “集思成册，一页一信。”
+                  </div>
+                  <div style={{fontFamily:'var(--mono)', fontSize:10, letterSpacing:'0.1em', textTransform:'uppercase', color:'var(--ink-4)', marginTop:14}}>— Quire manifesto, 2026</div>
+                </div>
+              </div>
+            </DCArtboard>
+          </DCSection>
+
+        </DesignCanvas>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>

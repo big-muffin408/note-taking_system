@@ -55,7 +55,7 @@ describe('Sidebar', () => {
 
   it('renders brand name', () => {
     renderSidebar();
-    expect(screen.getByText('Notebook')).toBeInTheDocument();
+    expect(screen.getByText('Quire')).toBeInTheDocument();
   });
 
   it('renders new note button', () => {

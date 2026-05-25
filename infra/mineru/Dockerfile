@@ -6,6 +6,7 @@ FROM ${VLLM_BASE_IMAGE}
 
 ARG VLLM_BASE_IMAGE
 ARG APT_MIRROR=
+ARG PIP_INDEX_URL=
 ARG MINERU_VERSION=3.1.4
 ARG MINERU_MODEL_SOURCE=modelscope
 ENV PYTHONUNBUFFERED=1
@@ -26,7 +27,10 @@ RUN if [ -n "$APT_MIRROR" ]; then \
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=cache,target=/root/.cache/uv \
-    python3 -m pip install -U pip uv \
+    if [ -n "$PIP_INDEX_URL" ]; then \
+      export PIP_INDEX_URL="$PIP_INDEX_URL" UV_DEFAULT_INDEX="$PIP_INDEX_URL"; \
+    fi \
+    && python3 -m pip install -U pip uv \
     && printf 'torch==2.6.0\ntorchvision==0.21.0\ntriton==3.2.0\n' > /tmp/mineru-constraints.txt \
     && uv pip install --system -U -c /tmp/mineru-constraints.txt "mineru[core]==${MINERU_VERSION}"
 

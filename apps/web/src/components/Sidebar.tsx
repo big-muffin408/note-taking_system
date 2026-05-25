@@ -5,6 +5,7 @@ import { useNotes } from '../contexts/NotesContext';
 import { markdownToHtml, readFileAsText } from '../lib/markdownConvert';
 import NoteList from './NoteList';
 import ThemeToggle from './ThemeToggle';
+import BrandMark from './BrandMark';
 
 interface SidebarProps {
   open?: boolean;
@@ -13,7 +14,7 @@ interface SidebarProps {
 
 export default function Sidebar({ open, onClose }: SidebarProps) {
   const { user, logout } = useAuth();
-  const { createNote, online, syncing, syncNow } = useNotes();
+  const { notes, createNote, online, syncing, syncNow } = useNotes();
   const navigate = useNavigate();
   const [creating, setCreating] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -57,8 +58,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       <div className="sidebar-top">
         {/* Brand */}
         <div className="brand">
-          <div className="brand-mark">N</div>
-          <div className="brand-name">Notebook <em>by Muffin</em></div>
+          <div className="brand-mark brand-mark-svg"><BrandMark size={28} /></div>
+          <div className="brand-name">Quire <em>· 集册</em></div>
           {onClose && (
             <button
               type="button"
@@ -112,14 +113,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         <button className="nav-item active">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="14" height="14"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3M5.5 9h5M5.5 11.5h5M5.5 6.5h2.5" strokeLinecap="round"/></svg>
           全部笔记
-        </button>
-        <button className="nav-item">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" width="14" height="14"><path d="M8 2l1.8 3.7 4 .6-3 2.9.8 4-3.6-1.9-3.6 1.9.8-4-3-2.9 4-.6z"/></svg>
-          收藏
-        </button>
-        <button className="nav-item">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><circle cx="12" cy="3.5" r="2"/><circle cx="4" cy="8" r="2"/><circle cx="12" cy="12.5" r="2"/><path d="M5.8 7l4.5-2.5M5.8 9l4.5 2.5"/></svg>
-          共享给我
+          <span className="nav-item-count">{notes.length}</span>
         </button>
       </div>
 

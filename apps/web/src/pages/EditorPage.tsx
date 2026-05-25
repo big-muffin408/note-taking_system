@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotes } from '../contexts/NotesContext';
+import { useAiPanel } from '../contexts/AiPanelContext';
 import { api, ApiError, streamAI } from '../lib/api';
 import {
   getCachedNote,
@@ -173,7 +174,8 @@ function detailToCached(note: NoteDetail, userId: string): OfflineNote {
 export default function EditorPage() {
   const { id } = useParams<{ id: string }>();
   const { token, user } = useAuth();
-  const { fetchNotes, online, syncing, syncNow, upsertLocalNote, resolveConflict } = useNotes();
+  const { fetchNotes, online, syncNow, upsertLocalNote, resolveConflict } = useNotes();
+  const ai = useAiPanel();
   const navigate = useNavigate();
 
   const [note, setNote] = useState<NoteDetail | null>(null);
@@ -184,36 +186,30 @@ export default function EditorPage() {
   const [collaboration, setCollaboration] = useState<CollaborationSession | null>(null);
   const [collabStatus, setCollabStatus] = useState<CollabStatus>('connecting');
   const [collaboratorCount, setCollaboratorCount] = useState(1);
+  const [collaborators, setCollaborators] = useState<Array<{ name: string; color: string }>>([]);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [lastPdfUpload, setLastPdfUpload] = useState<PdfUploadResponse | null>(null);
   const [pdfJob, setPdfJob] = useState<PdfJobResponse | null>(null);
-
-  // AI state — streaming
-  const [aiLoading, setAiLoading] = useState<AiMode | null>(null);
-  const [aiQuestion, setAiQuestion] = useState('');
-  const [aiResult, setAiResult] = useState('');
-  const [aiResultStreaming, setAiResultStreaming] = useState('');
-  const [aiSources, setAiSources] = useState<AiChatResponse['sources']>([]);
-  const [aiError, setAiError] = useState('');
-
-  // Polish state
-  const [selectedText, setSelectedText] = useState('');
-  const [polishResult, setPolishResult] = useState('');
-  const [polishStreaming, setPolishStreaming] = useState('');
-  const [showPolishModal, setShowPolishModal] = useState(false);
 
   const [insertRequest, setInsertRequest] = useState<{ id: number; html: string } | null>(null);
   const [contentKey, setContentKey] = useState(0);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [readingMode, setReadingMode] = useState(false);
-  const [aiWorkbenchOpen, setAiWorkbenchOpen] = useState(false);
+
+  // Aliases into ai context (kept short so existing call sites still read naturally)
+  const aiLoading = ai.aiLoading;
+  const setAiLoading = ai.setAiLoading;
+  const setAiError = ai.setAiError;
+  const selectedText = ai.selectedText;
+  const setSelectedText = ai.setSelectedText;
 
   const contentRef = useRef('');
   const titleRef = useRef('');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const streamAbortRef = useRef<AbortController | null>(null);
+  const streamAbortRef = ai.streamAbortRef;
   const collabSyncedRef = useRef(false);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!id || !token || !user) return;
@@ -335,6 +331,7 @@ export default function EditorPage() {
       collabSyncedRef.current = false;
       setCollabStatus('disconnected');
       setCollaboratorCount(1);
+      setCollaborators([]);
       setCollaboration(null);
       return;
     }
@@ -342,6 +339,7 @@ export default function EditorPage() {
     collabSyncedRef.current = false;
     setCollabStatus('connecting');
     setCollaboratorCount(1);
+    setCollaborators([]);
 
     const document = new Y.Doc();
     const provider = new WebsocketProvider(
@@ -354,7 +352,16 @@ export default function EditorPage() {
     );
 
     const updateAwarenessCount = () => {
-      setCollaboratorCount(provider.awareness.getStates().size);
+      const states = provider.awareness.getStates();
+      setCollaboratorCount(states.size);
+      const list: Array<{ name: string; color: string }> = [];
+      states.forEach((state: any) => {
+        const u = state?.user;
+        if (u && typeof u.name === 'string') {
+          list.push({ name: u.name, color: typeof u.color === 'string' ? u.color : '#888' });
+        }
+      });
+      setCollaborators(list);
     };
 
     const handleStatus = ({ status }: { status: 'connected' | 'connecting' | 'disconnected' }) => {
@@ -606,23 +613,18 @@ export default function EditorPage() {
     }
   };
 
-  /** Cancel any ongoing SSE stream */
-  const cancelStream = () => {
-    if (streamAbortRef.current) {
-      streamAbortRef.current.abort();
-      streamAbortRef.current = null;
-    }
-    setAiLoading(null);
-  };
+  const cancelStream = ai.cancelStream;
 
   const runSummary = useCallback(async () => {
     if (!id) return;
     cancelStream();
     setAiLoading('summary');
     setAiError('');
-    setAiResult('');
-    setAiResultStreaming('');
-    setAiSources([]);
+    ai.setSummaryResult('');
+    ai.setSummaryStreaming('');
+    ai.setSummarySources([]);
+    ai.setTab('summary');
+    if (!ai.open) ai.setOpen(true);
 
     const abort = new AbortController();
     streamAbortRef.current = abort;
@@ -631,11 +633,11 @@ export default function EditorPage() {
       '/api/ai/summary',
       { noteId: id, documentId: note?.sourcePdfId, text: contentRef.current },
       {
-        onMeta: (meta) => setAiSources(meta.sources ?? []),
-        onChunk: (chunk) => setAiResultStreaming((prev) => prev + chunk),
+        onMeta: (meta) => ai.setSummarySources(meta.sources ?? []),
+        onChunk: (chunk) => ai.setSummaryStreaming((prev) => (prev || '') + chunk),
         onDone: (result) => {
-          setAiResult(result.content ?? '');
-          setAiResultStreaming('');
+          ai.setSummaryResult(result.content ?? '');
+          ai.setSummaryStreaming('');
           setAiLoading(null);
         },
         onError: (err) => {
@@ -647,51 +649,76 @@ export default function EditorPage() {
       },
       abort.signal,
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, note?.sourcePdfId]);
 
-  const runChat = useCallback(async () => {
-    if (!id || !aiQuestion.trim()) return;
-    console.log('[runChat] text length:', contentRef.current.length, 'question:', aiQuestion.trim().slice(0, 50));
+  const runChat = useCallback(async (question: string) => {
+    if (!id || !question.trim()) return;
     cancelStream();
     setAiLoading('chat');
     setAiError('');
-    setAiResult('');
-    setAiResultStreaming('');
-    setAiSources([]);
+
+    const userMsg = { who: 'user' as const, text: question.trim() };
+    ai.appendMessage(userMsg);
+    ai.appendMessage({ who: 'ai', text: '', streaming: true });
+    let acc = '';
+    let sources: AiChatResponse['sources'] = [];
 
     const abort = new AbortController();
     streamAbortRef.current = abort;
 
     await streamAI(
       '/api/ai/chat',
-      { noteId: id, documentId: note?.sourcePdfId, question: aiQuestion.trim(), text: contentRef.current },
+      { noteId: id, documentId: note?.sourcePdfId, question: question.trim(), text: contentRef.current },
       {
-        onMeta: (meta) => setAiSources(meta.sources ?? []),
-        onChunk: (chunk) => setAiResultStreaming((prev) => prev + chunk),
+        onMeta: (meta) => {
+          sources = meta.sources ?? [];
+        },
+        onChunk: (chunk) => {
+          acc += chunk;
+          ai.updateLastMessage((last) => ({ ...last, text: acc, streaming: true }));
+        },
         onDone: (result) => {
-          setAiResult(result.content ?? '');
-          setAiResultStreaming('');
+          ai.updateLastMessage((last) => ({
+            ...last,
+            text: result.content ?? acc,
+            streaming: false,
+            sources,
+          }));
           setAiLoading(null);
         },
         onError: (err) => {
           if (err.name !== 'AbortError') {
             setAiError(err.message || '问答失败');
+            ai.updateLastMessage((last) => ({
+              ...last,
+              text: acc || '（生成失败）',
+              streaming: false,
+            }));
+          } else {
+            ai.updateLastMessage((last) => ({
+              ...last,
+              text: acc,
+              streaming: false,
+            }));
           }
           setAiLoading(null);
         },
       },
       abort.signal,
     );
-  }, [id, note?.sourcePdfId, aiQuestion]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, note?.sourcePdfId]);
 
   const runPolish = useCallback(async () => {
     if (!selectedText.trim()) return;
     cancelStream();
     setAiLoading('polish');
     setAiError('');
-    setPolishResult('');
-    setPolishStreaming('');
-    setShowPolishModal(true);
+    ai.setPolishResult('');
+    ai.setPolishStreaming('');
+    ai.setTab('polish');
+    if (!ai.open) ai.setOpen(true);
 
     const abort = new AbortController();
     streamAbortRef.current = abort;
@@ -700,10 +727,10 @@ export default function EditorPage() {
       '/api/ai/polish',
       { text: selectedText },
       {
-        onChunk: (chunk) => setPolishStreaming((prev) => prev + chunk),
+        onChunk: (chunk) => ai.setPolishStreaming((prev) => (prev || '') + chunk),
         onDone: (result) => {
-          setPolishResult(result.content ?? '');
-          setPolishStreaming('');
+          ai.setPolishResult(result.content ?? '');
+          ai.setPolishStreaming('');
           setAiLoading(null);
         },
         onError: (err) => {
@@ -711,41 +738,32 @@ export default function EditorPage() {
             setAiError(err.message || '润色失败');
           }
           setAiLoading(null);
-          setShowPolishModal(false);
         },
       },
       abort.signal,
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedText]);
 
-  const applyPolishResult = (replaceSelection: boolean) => {
-    const text = polishResult || polishStreaming;
-    if (!text.trim()) return;
-    if (replaceSelection) {
-      // Replace: wrap in a marker so EditorPage inserts as replacement
-      setInsertRequest({
-        id: Date.now(),
-        html: textToParagraphs(text),
-      });
-    } else {
-      setInsertRequest({
-        id: Date.now(),
-        html: `<h2>润色结果</h2>${textToParagraphs(text)}`,
-      });
-    }
-    scheduleSave();
-    setShowPolishModal(false);
-  };
-
-  const insertAiResult = () => {
-    const text = aiResult || aiResultStreaming;
+  const insertAiResult = useCallback((text: string) => {
     if (!text.trim()) return;
     setInsertRequest({
       id: Date.now(),
-      html: `<h2>AI 结果</h2>${textToParagraphs(text)}`
+      html: textToParagraphs(text),
     });
     scheduleSave();
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Register handlers so AiPanel can trigger them
+  useEffect(() => {
+    ai.registerHandlers({
+      runSummary,
+      runChat,
+      runPolish,
+      insertResult: insertAiResult,
+    });
+  }, [ai, runSummary, runChat, runPolish, insertAiResult]);
 
   const handleResolveConflict = async (resolution: 'local' | 'server') => {
     if (!id || !user) return;
@@ -812,15 +830,14 @@ export default function EditorPage() {
       streamAbortRef.current = null;
     }
     setAiLoading(null);
-    setAiResult('');
-    setAiResultStreaming('');
-    setAiSources([]);
     setAiError('');
-    setAiQuestion('');
-    setPolishResult('');
-    setPolishStreaming('');
-    setShowPolishModal(false);
+    ai.setSummaryResult('');
+    ai.setSummaryStreaming('');
+    ai.setSummarySources([]);
+    ai.setPolishResult('');
+    ai.setPolishStreaming('');
     setSelectedText('');
+    ai.clearMessages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -870,13 +887,43 @@ export default function EditorPage() {
     );
   }
 
-  const displayText = aiResultStreaming || aiResult;
-  const isStreaming = aiLoading === 'summary' || aiLoading === 'chat';
+  // Compute word count from current content (plain text length excluding HTML tags)
+  const plainText = note.content.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+  const wordCount = plainText.length;
+  const updatedLabel = (() => {
+    const ts = note.updatedAt;
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      const sameDay = d.toDateString() === new Date().toDateString();
+      if (sameDay) return `更新于 ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+      return `更新于 ${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+    } catch {
+      return '';
+    }
+  })();
+  const meAvatar = (user?.displayName ?? user?.email ?? '?').charAt(0);
+  const otherCollaborators = collaborators.filter((c) => c.name !== (user?.displayName ?? user?.email ?? ''));
+  const collaboratorsLabel = otherCollaborators.length > 0
+    ? `${user?.displayName ?? '我'} + ${otherCollaborators.length} 位协作者`
+    : (user?.displayName ?? '我');
+
+  const editorMeta = (
+    <div className="editor-meta">
+      {updatedLabel && <span>{updatedLabel}</span>}
+      {updatedLabel && <span>·</span>}
+      <span>{wordCount.toLocaleString()} 字</span>
+      <span>·</span>
+      <span>{collaboratorsLabel}</span>
+    </div>
+  );
 
   return (
     <div className="editor-page">
       <header className="topbar">
         <div className="crumbs">
+          <span>我的笔记</span>
+          <span className="sep">/</span>
           <span className="here">{title || '未命名笔记'}</span>
         </div>
         <div className="topbar-spacer" />
@@ -893,11 +940,40 @@ export default function EditorPage() {
           {getStatusText(collabStatus, collaboratorCount)}
         </span>
 
+        {collaborators.length > 0 && (
+          <div className="presence" title={collaborators.map((c) => c.name).join(', ')}>
+            {collaborators.slice(0, 4).map((c, idx) => (
+              <div
+                key={`${c.name}-${idx}`}
+                className="presence-avatar"
+                style={{ background: c.color }}
+              >
+                {c.name.charAt(0).toUpperCase()}
+              </div>
+            ))}
+          </div>
+        )}
+
         {id && !id.startsWith('local-') && (
           <>
             <button className="btn-ghost" onClick={() => setShowVersionHistory(true)} title="查看版本历史">
               历史
             </button>
+            <button
+              className="btn-ghost"
+              onClick={() => pdfInputRef.current?.click()}
+              disabled={uploadingPdf}
+              title="上传 PDF 解析为笔记"
+            >
+              {uploadingPdf ? '解析中…' : 'PDF'}
+            </button>
+            <input
+              ref={pdfInputRef}
+              type="file"
+              accept="application/pdf,.pdf"
+              style={{ display: 'none' }}
+              onChange={handlePdfUpload}
+            />
             <button className="btn-ghost" onClick={() => setShowShareDialog(true)} title="分享笔记">
               分享
             </button>
@@ -915,162 +991,59 @@ export default function EditorPage() {
           {saving ? '保存中…' : '保存'}
         </button>
         <button
-          className={`btn-ghost${aiWorkbenchOpen ? ' active' : ''}`}
-          onClick={() => setAiWorkbenchOpen((prev) => !prev)}
+          className={`btn-ghost${ai.open ? ' active' : ''}`}
+          onClick={ai.toggleOpen}
           title="AI 工具面板"
-          style={aiWorkbenchOpen ? { background: 'var(--ink)', color: 'var(--paper)' } : undefined}
+          style={ai.open ? { background: 'var(--ink)', color: 'var(--paper)' } : undefined}
         >
           ✦ AI
         </button>
       </header>
 
-      {aiWorkbenchOpen && <section className="ai-workbench">
-        {note.syncStatus === 'conflict' && (
-          <div className="sync-conflict-panel">
-            <span>{note.error ?? '服务器版本已更新，请处理当前本地草稿。'}</span>
-            <button type="button" className="btn-secondary" onClick={() => handleResolveConflict('local')}>
-              保留本地草稿
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => handleResolveConflict('server')}>
-              使用服务器版本
-            </button>
-          </div>
-        )}
-        <div className="pdf-upload-control">
-          <label className="btn-secondary">
-            {uploadingPdf ? '处理中…' : '上传 PDF'}
-            <input
-              type="file"
-              accept="application/pdf,.pdf"
-              onChange={handlePdfUpload}
-              disabled={uploadingPdf}
-            />
-          </label>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={runSummary}
-            disabled={aiLoading !== null}
-          >
-            {aiLoading === 'summary' ? (
-              <><span className="ai-spinner" /> 生成中</>
-            ) : '生成摘要'}
+      {note.syncStatus === 'conflict' && (
+        <div className="sync-conflict-panel">
+          <span>{note.error ?? '服务器版本已更新，请处理当前本地草稿。'}</span>
+          <button type="button" className="btn-secondary" onClick={() => handleResolveConflict('local')}>
+            保留本地草稿
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => handleResolveConflict('server')}>
+            使用服务器版本
           </button>
         </div>
+      )}
 
-        {pdfJob && (
-          <div className={`pdf-job-panel pdf-job-panel-${pdfJob.status}`}>
-            <div className="pdf-job-main">
-              <span className="pdf-job-status">{getPdfJobStatusText(pdfJob.status)}</span>
-              {pdfJob.fileName && <span>{pdfJob.fileName}</span>}
-              <span>任务 {pdfJob.jobId.slice(-8)}</span>
-            </div>
-            {(pdfJob.status === 'queued' || pdfJob.status === 'parsing') && (
-              <div
-                className="pdf-job-progress"
-                role="progressbar"
-                aria-label="PDF 解析进度"
-              >
-                <div className="pdf-job-progress-bar" />
-              </div>
-            )}
-            <div className="pdf-job-meta">
-              {pdfJob.parser && <span>{pdfJob.parser}</span>}
-              {typeof pdfJob.pages === 'number' && <span>{pdfJob.pages} 页</span>}
-              {typeof pdfJob.chunks === 'number' && <span>{pdfJob.chunks} chunks</span>}
-              {typeof pdfJob.assetCount === 'number' && <span>{pdfJob.assetCount} 图片</span>}
-              {pdfJob.fallbackReason && <span>{pdfJob.fallbackReason}</span>}
-              {pdfJob.warnings?.slice(0, 1).map((warning) => (
-                <span key={warning}>{warning}</span>
-              ))}
-            </div>
-            {pdfJob.status === 'failed' && (
-              <div className="pdf-job-actions">
-                <span>{pdfJob.error ?? 'PDF 解析失败'}</span>
-                <button type="button" className="btn-secondary" onClick={retryPdfJob} disabled={uploadingPdf}>
-                  {uploadingPdf ? '重试中…' : '重试解析'}
-                </button>
-              </div>
-            )}
+      {pdfJob && (pdfJob.status === 'queued' || pdfJob.status === 'parsing' || pdfJob.status === 'failed') && (
+        <div className={`pdf-job-floating pdf-job-panel-${pdfJob.status}`}>
+          <div className="pdf-job-main">
+            <strong>{getPdfJobStatusText(pdfJob.status)}</strong>
+            {pdfJob.fileName && <span style={{ marginLeft: 6 }}>{pdfJob.fileName}</span>}
           </div>
-        )}
-
-        {lastPdfUpload && (
-          <div className={`pdf-parse-summary${lastPdfUpload.fallbackReason ? ' pdf-parse-summary-warning' : ''}`}>
-            <span>{lastPdfUpload.parser ?? 'PDF'} · {lastPdfUpload.pages} 页</span>
-            <span>{lastPdfUpload.chunks ?? 0} chunks</span>
-            <span>{lastPdfUpload.assetCount ?? 0} 图片</span>
-            {lastPdfUpload.fallbackReason && <span>{lastPdfUpload.fallbackReason}</span>}
-            {lastPdfUpload.warnings?.slice(0, 1).map((warning) => (
-              <span key={warning}>{warning}</span>
-            ))}
-          </div>
-        )}
-
-        <div className="ai-chat-control">
-          <input
-            type="text"
-            value={aiQuestion}
-            onChange={(event) => setAiQuestion(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') runChat();
-            }}
-            placeholder="向当前笔记或 PDF 提问…"
-          />
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={runChat}
-            disabled={aiLoading !== null || !aiQuestion.trim()}
-          >
-            {aiLoading === 'chat' ? (
-              <><span className="ai-spinner" /> 检索中</>
-            ) : '问答'}
-          </button>
-          {(aiLoading === 'summary' || aiLoading === 'chat') && (
-            <button
-              type="button"
-              className="btn-secondary btn-stop"
-              onClick={cancelStream}
-              title="停止生成"
+          {(pdfJob.status === 'queued' || pdfJob.status === 'parsing') && (
+            <div
+              className="pdf-job-progress"
+              role="progressbar"
+              aria-label="PDF 解析进度"
+              style={{ marginTop: 6 }}
             >
-              ■ 停止
-            </button>
+              <div className="pdf-job-progress-bar" />
+            </div>
+          )}
+          {pdfJob.status === 'failed' && (
+            <div className="pdf-job-actions" style={{ marginTop: 6 }}>
+              <span>{pdfJob.error ?? 'PDF 解析失败'}</span>
+              <button type="button" className="btn-secondary" onClick={retryPdfJob} disabled={uploadingPdf}>
+                {uploadingPdf ? '重试中…' : '重试'}
+              </button>
+            </div>
           )}
         </div>
+      )}
 
-        {(displayText || aiError) && (
-          <div className="ai-result-panel">
-            {aiError ? (
-              <p className="ai-error">{aiError}</p>
-            ) : (
-              <>
-                <p className={`ai-result-text${isStreaming ? ' ai-result-streaming' : ''}`}>
-                  {displayText}
-                </p>
-                {aiSources.length > 0 && (
-                  <div className="ai-sources">
-                    {aiSources.slice(0, 3).map((source) => (
-                      <span
-                        key={`${source.sourceName}-${source.chunkIndex}`}
-                        title={source.textPreview || source.text}
-                      >
-                        {source.sourceName || 'PDF'} #{source.chunkIndex + 1}
-                        {source.textPreview ? ` · ${source.textPreview}` : ''}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {!isStreaming && (
-                  <button type="button" className="btn-link" onClick={insertAiResult}>
-                    插入笔记
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        )}
-      </section>}
+      {lastPdfUpload?.warnings?.length ? (
+        <div className="pdf-job-floating" style={{ top: 96 }}>
+          {lastPdfUpload.parser ?? 'PDF'} · {lastPdfUpload.pages} 页 · {lastPdfUpload.warnings[0]}
+        </div>
+      ) : null}
 
       <Editor
         key={id}
@@ -1086,6 +1059,7 @@ export default function EditorPage() {
         onImageUpload={handleImageUpload}
         title={title}
         onTitleChange={(value) => { setTitle(value); titleRef.current = value; scheduleSave(); }}
+        metaSlot={editorMeta}
       />
 
       {/* Version History */}
@@ -1105,70 +1079,6 @@ export default function EditorPage() {
         />
       )}
 
-      {/* Polish Modal */}
-      {showPolishModal && (
-        <div className="polish-modal-overlay" onClick={() => {
-          if (aiLoading !== 'polish') setShowPolishModal(false);
-        }}>
-          <div className="polish-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="polish-modal-header">
-              <h2>✦ AI 润色</h2>
-              <button
-                type="button"
-                className="polish-modal-close"
-                onClick={() => {
-                  cancelStream();
-                  setShowPolishModal(false);
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="polish-modal-body">
-              <div className="polish-panel">
-                <div className="polish-panel-label">原文</div>
-                <div className="polish-original">{selectedText}</div>
-              </div>
-              <div className="polish-divider">→</div>
-              <div className="polish-panel">
-                <div className="polish-panel-label">润色结果</div>
-                <div className={`polish-result${aiLoading === 'polish' ? ' ai-result-streaming' : ''}`}>
-                  {polishStreaming || polishResult || (
-                    aiLoading === 'polish' ? <span className="polish-thinking">润色中…</span> : null
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {(polishResult || polishStreaming) && aiLoading !== 'polish' && (
-              <div className="polish-modal-footer">
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => applyPolishResult(true)}
-                >
-                  替换选中文本
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => applyPolishResult(false)}
-                >
-                  插入笔记
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => setShowPolishModal(false)}
-                >
-                  关闭
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

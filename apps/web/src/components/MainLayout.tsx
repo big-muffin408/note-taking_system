@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import AiPanel from './AiPanel';
+import { useAiPanel } from '../contexts/AiPanelContext';
 
 export default function MainLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { open: aiOpen } = useAiPanel();
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
@@ -17,7 +20,7 @@ export default function MainLayout() {
   }, [sidebarOpen, closeSidebar]);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${aiOpen ? ' has-ai' : ''}`}>
       <button
         type="button"
         className="sidebar-hamburger"
@@ -33,6 +36,7 @@ export default function MainLayout() {
       <main className="main-content">
         <Outlet />
       </main>
+      <AiPanel />
     </div>
   );
 }
