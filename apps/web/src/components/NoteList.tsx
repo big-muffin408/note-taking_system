@@ -3,6 +3,13 @@ import { createPortal } from 'react-dom';
 import { NavLink, useNavigate, useParams } from 'react-router-dom';
 import { useNotes, type NoteSummary } from '../contexts/NotesContext';
 
+function getSnippet(note: NoteSummary): string {
+  const raw = (note as any).content ?? (note as any).snippet ?? '';
+  if (!raw) return '';
+  const text = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return text.slice(0, 80);
+}
+
 export default function NoteList() {
   const { notes, loading, deleteNote } = useNotes();
   const navigate = useNavigate();
@@ -50,20 +57,25 @@ export default function NoteList() {
             to={`/note/${note.id}`}
             className={({ isActive }) => `note-item${isActive ? ' active' : ''}`}
           >
-              <span className="note-item-main">
-                <span className="note-item-title">{note.title || '未命名笔记'}</span>
+            <div className="note-item-main">
+              <span className="note-item-title">{note.title || '未命名笔记'}</span>
+              {getSnippet(note) && (
+                <span className="note-item-snippet">{getSnippet(note)}</span>
+              )}
+              <div className="note-item-meta">
+                <span className="note-item-date">
+                  {new Date(note.updatedAt).toLocaleDateString('zh-CN', {
+                    month: 'short',
+                    day: 'numeric',
+                  })}
+                </span>
                 {note.syncStatus && note.syncStatus !== 'synced' && (
-                  <span className={`note-sync-badge note-sync-badge-${note.syncStatus}`}>
+                  <span className={`sync-badge ${note.syncStatus}`}>
                     {note.syncStatus === 'pending' ? '待同步' : note.syncStatus === 'conflict' ? '冲突' : '离线'}
                   </span>
                 )}
-                <span className="note-item-date">
-                {new Date(note.updatedAt).toLocaleDateString('zh-CN', {
-                  month: 'short',
-                  day: 'numeric',
-                })}
-              </span>
-            </span>
+              </div>
+            </div>
           </NavLink>
           <button
             type="button"

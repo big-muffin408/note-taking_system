@@ -79,16 +79,23 @@ export default function RegisterPage() {
 
   return (
     <div className="auth-page">
-      <form className="auth-card" onSubmit={handleSubmit}>
-        <div className="auth-header">
-          <div className="auth-logo">
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-              <rect width="32" height="32" rx="8" fill="#4f46e5" />
-              <path d="M9 10h14M9 16h10M9 22h12" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-            </svg>
-          </div>
+      <div className="auth-art">
+        <div className="brand">
+          <div className="brand-mark">N</div>
+          <div className="brand-name">Notebook <em>by Muffin</em></div>
+        </div>
+        <div className="quote">
+          好的笔记系统，<br />
+          是思维的<em>外延</em>。
+        </div>
+        <div className="attrib">协作 · AI 增强 · 离线优先</div>
+      </div>
+
+      <div className="auth-form-wrap">
+      <form className="auth-form" onSubmit={handleSubmit}>
+        <div>
           <h1>注册</h1>
-          <p className="auth-subtitle">创建你的 AI 协作笔记账号</p>
+          <p className="sub">创建你的 AI 协作笔记账号</p>
         </div>
 
         {error && <div className="auth-error">{error}</div>}
@@ -168,7 +175,7 @@ export default function RegisterPage() {
           />
         </label>
 
-        <button id="register-submit" className="btn-primary" type="submit" disabled={submitting}>
+        <button id="register-submit" className="btn-primary-lg" type="submit" disabled={submitting}>
           {submitting ? '注册中…' : '注册'}
         </button>
 
@@ -176,6 +183,7 @@ export default function RegisterPage() {
           已有账号？<Link to="/login">登录</Link>
         </p>
       </form>
+      </div>
     </div>
   );
 }

@@ -38,7 +38,6 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
     event.target.value = '';
     if (!file) return;
     setError(null);
-
     try {
       const md = await readFileAsText(file);
       const html = markdownToHtml(md);
@@ -51,61 +50,115 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
     }
   }
 
+  const syncLabel = !online ? '离线' : syncing ? '同步中…' : '已同步 · 在线';
+
   return (
     <aside className={`sidebar${open ? ' sidebar-open' : ''}`}>
       <div className="sidebar-top">
-        <div className="sidebar-brand">
-          <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
-            <rect width="32" height="32" rx="8" fill="#4f46e5" />
-            <path d="M9 10h14M9 16h10M9 22h12" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-          </svg>
-          <span>AI Notes</span>
+        {/* Brand */}
+        <div className="brand">
+          <div className="brand-mark">N</div>
+          <div className="brand-name">Notebook <em>by Muffin</em></div>
           {onClose && (
-            <button type="button" className="sidebar-close" onClick={onClose} aria-label="关闭侧边栏">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <path d="M4 4l10 10M14 4L4 14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <button
+              type="button"
+              className="sidebar-close"
+              onClick={onClose}
+              aria-label="关闭侧边栏"
+              style={{ marginLeft: 'auto' }}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M4 4l8 8M12 4L4 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
               </svg>
             </button>
           )}
         </div>
 
-        <button className="btn-new-note" onClick={handleNewNote} disabled={creating}>
-          <span>+</span> {creating ? '创建中…' : '新建笔记'}
-        </button>
+        {/* Actions: new note + import */}
+        <div className="sidebar-actions">
+          <button className="btn-new" onClick={handleNewNote} disabled={creating}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" width="14" height="14"><path d="M8 3v10M3 8h10"/></svg>
+            {creating ? '创建中…' : '新建笔记'}
+          </button>
+          <label className="btn-import-md" title="导入 Markdown">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M8 11V3M5 6l3-3 3 3M3 13h10"/></svg>
+            <input
+              type="file"
+              accept=".md,.markdown,text/markdown"
+              onChange={handleImportMarkdown}
+            />
+          </label>
+        </div>
+
         {error && (
           <div className="sidebar-error" role="alert">
             {error}
             <button type="button" className="note-list-error-dismiss" onClick={() => setError(null)}>×</button>
           </div>
         )}
-        <label className="btn-import-md">
-          导入 .md
-          <input
-            type="file"
-            accept=".md,.markdown,text/markdown"
-            onChange={handleImportMarkdown}
-          />
-        </label>
+
+        {/* Search */}
+        <div className="search">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+            <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>
+          </svg>
+          <input placeholder="搜索笔记 · 内容 · 标签" readOnly />
+          <span className="search-kbd">⌘K</span>
+        </div>
       </div>
+
+      {/* Nav filters */}
+      <div className="sidebar-nav">
+        <button className="nav-item active">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="14" height="14"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3M5.5 9h5M5.5 11.5h5M5.5 6.5h2.5" strokeLinecap="round"/></svg>
+          全部笔记
+        </button>
+        <button className="nav-item">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" width="14" height="14"><path d="M8 2l1.8 3.7 4 .6-3 2.9.8 4-3.6-1.9-3.6 1.9.8-4-3-2.9 4-.6z"/></svg>
+          收藏
+        </button>
+        <button className="nav-item">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><circle cx="12" cy="3.5" r="2"/><circle cx="4" cy="8" r="2"/><circle cx="12" cy="12.5" r="2"/><path d="M5.8 7l4.5-2.5M5.8 9l4.5 2.5"/></svg>
+          共享给我
+        </button>
+      </div>
+
+      {/* Notes section */}
+      <div className="section-label">最近笔记</div>
 
       <div className="sidebar-notes">
         <NoteList />
       </div>
 
+      {/* Footer */}
       <div className="sidebar-bottom">
         <ThemeToggle />
-        <button className="sync-status-button" onClick={syncNow} disabled={!online || syncing} title="同步离线改动">
-          {!online ? '离线' : syncing ? '同步中…' : '同步'}
-        </button>
-        <div className="user-info">
-          <div className="user-avatar">
-            {user?.displayName?.charAt(0)?.toUpperCase() ?? '?'}
-          </div>
-          <span className="user-name">{user?.displayName ?? '用户'}</span>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            className="user-chip"
+            onClick={syncNow}
+            disabled={!online || syncing}
+            title="点击同步离线改动"
+            style={{ flex: 1 }}
+          >
+            <div className="user-avatar">
+              {user?.displayName?.charAt(0)?.toUpperCase() ?? '?'}
+            </div>
+            <div className="user-info">
+              <div className="user-name">{user?.displayName ?? '用户'}</div>
+              <div className="user-status">
+                <span className="ok-dot" />
+                {syncLabel}
+              </div>
+            </div>
+          </button>
+          <button className="btn-icon" style={{ width: 28, height: 28, border: 0 }} onClick={logout} title="退出登录">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" width="14" height="14">
+              <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h3M10 11l3-3-3-3M13 8H6"/>
+            </svg>
+          </button>
         </div>
-        <button className="btn-logout" onClick={logout} title="退出登录">
-          退出
-        </button>
       </div>
     </aside>
   );

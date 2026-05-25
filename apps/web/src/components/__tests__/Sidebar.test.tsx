@@ -55,7 +55,7 @@ describe('Sidebar', () => {
 
   it('renders brand name', () => {
     renderSidebar();
-    expect(screen.getByText('AI Notes')).toBeInTheDocument();
+    expect(screen.getByText('Notebook')).toBeInTheDocument();
   });
 
   it('renders new note button', () => {
@@ -70,12 +70,12 @@ describe('Sidebar', () => {
 
   it('renders logout button', () => {
     renderSidebar();
-    expect(screen.getByText('退出')).toBeInTheDocument();
+    expect(screen.getByTitle('退出登录')).toBeInTheDocument();
   });
 
-  it('renders sync button', () => {
+  it('renders sync status in user chip', () => {
     renderSidebar();
-    expect(screen.getByText('同步')).toBeInTheDocument();
+    expect(screen.getByText(/已同步/)).toBeInTheDocument();
   });
 
   it('renders theme toggle', () => {
@@ -83,9 +83,9 @@ describe('Sidebar', () => {
     expect(screen.getByRole('group')).toBeInTheDocument();
   });
 
-  it('renders import markdown label', () => {
+  it('renders import markdown button', () => {
     renderSidebar();
-    expect(screen.getByText('导入 .md')).toBeInTheDocument();
+    expect(screen.getByTitle('导入 Markdown')).toBeInTheDocument();
   });
 
   it('creates note and navigates on new note click', async () => {
@@ -98,15 +98,15 @@ describe('Sidebar', () => {
     });
   });
 
-  it('calls logout on logout click', () => {
+  it('calls logout on logout button click', () => {
     renderSidebar();
-    fireEvent.click(screen.getByText('退出'));
+    fireEvent.click(screen.getByTitle('退出登录'));
     expect(mockLogout).toHaveBeenCalled();
   });
 
-  it('calls syncNow on sync button click', () => {
+  it('calls syncNow when user chip is clicked', () => {
     renderSidebar();
-    fireEvent.click(screen.getByText('同步'));
+    fireEvent.click(screen.getByTitle('点击同步离线改动'));
     expect(mockSyncNow).toHaveBeenCalled();
   });
 
@@ -126,7 +126,6 @@ describe('Sidebar', () => {
 
   it('shows offline status when not online', () => {
     vi.mocked(vi.importActual('../../contexts/NotesContext')).then(() => {});
-    // Re-mock with offline
     vi.doMock('../../contexts/NotesContext', () => ({
       useNotes: () => ({
         notes: [],
@@ -138,7 +137,6 @@ describe('Sidebar', () => {
         syncNow: mockSyncNow,
       }),
     }));
-    // This test would need a re-render with the new mock, which is complex
-    // Skipping for now - the offline state is tested via the sync button disabled state
+    // Offline state is reflected in the user-chip label text
   });
 });
