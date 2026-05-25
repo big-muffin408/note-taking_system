@@ -206,6 +206,8 @@ export default function EditorPage() {
   const [contentKey, setContentKey] = useState(0);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [readingMode, setReadingMode] = useState(false);
+  const [aiWorkbenchOpen, setAiWorkbenchOpen] = useState(false);
 
   const contentRef = useRef('');
   const titleRef = useRef('');
@@ -873,56 +875,56 @@ export default function EditorPage() {
 
   return (
     <div className="editor-page">
-      <header className="editor-header">
-        <input
-          className="title-input"
-          type="text"
-          value={title}
-          onChange={handleTitleChange}
-          placeholder="笔记标题"
-        />
-        <div className="editor-status">
-          <span className={`offline-status offline-status-${note.syncStatus ?? 'synced'}`}>
-            {!online ? '离线编辑' : note.syncStatus === 'pending' ? '待同步' : note.syncStatus === 'conflict' ? '有冲突' : syncing ? '同步中…' : '已同步'}
-          </span>
-          <span className={`collab-status collab-status-${collabStatus}`}>
-            {getStatusText(collabStatus, collaboratorCount)}
-          </span>
-          {saving && <span className="status-saving">保存中…</span>}
-          {!saving && lastSaved && (
-            <span className="status-saved">已保存 {lastSaved}</span>
-          )}
-          {id && !id.startsWith('local-') && (
-            <>
-              <button
-                className="btn-secondary"
-                onClick={() => setShowShareDialog(true)}
-                title="分享笔记"
-              >
-                分享
-              </button>
-              <button
-                className="btn-secondary"
-                onClick={() => setShowVersionHistory(true)}
-                title="查看版本历史"
-              >
-                版本历史
-              </button>
-            </>
-          )}
-          <button className="btn-secondary" onClick={handleExportMarkdown} title="导出为 Markdown">
-            导出 .md
-          </button>
-          <button className="btn-secondary" onClick={handleExportHtml} title="导出为 HTML">
-            导出 .html
-          </button>
-          <button className="btn-save" onClick={saveToServer} disabled={saving}>
-            {saving ? '保存中…' : '保存'}
-          </button>
+      <header className="topbar">
+        <div className="crumbs">
+          <span className="here">{title || '未命名笔记'}</span>
         </div>
+        <div className="topbar-spacer" />
+
+        <div className="save-state">
+          {saving ? (
+            <><span className="pulse" /> 保存中…</>
+          ) : lastSaved ? (
+            <><span className="pulse" /> 已保存 {lastSaved}</>
+          ) : null}
+        </div>
+
+        <span className={`collab-status collab-status-${collabStatus}`} style={{ fontSize: '11px', padding: '3px 8px' }}>
+          {getStatusText(collabStatus, collaboratorCount)}
+        </span>
+
+        {id && !id.startsWith('local-') && (
+          <>
+            <button className="btn-ghost" onClick={() => setShowVersionHistory(true)} title="查看版本历史">
+              历史
+            </button>
+            <button className="btn-ghost" onClick={() => setShowShareDialog(true)} title="分享笔记">
+              分享
+            </button>
+          </>
+        )}
+        <button
+          className={`btn-ghost btn-reading-mode${readingMode ? ' active' : ''}`}
+          onClick={() => setReadingMode((prev) => !prev)}
+          title={readingMode ? '切换到编辑模式' : '切换到阅读模式'}
+        >
+          {readingMode ? '编辑' : '阅读'}
+        </button>
+        <button className="btn-ghost" onClick={handleExportMarkdown} title="导出为 Markdown">导出</button>
+        <button className="btn-ghost" onClick={saveToServer} disabled={saving}>
+          {saving ? '保存中…' : '保存'}
+        </button>
+        <button
+          className={`btn-ghost${aiWorkbenchOpen ? ' active' : ''}`}
+          onClick={() => setAiWorkbenchOpen((prev) => !prev)}
+          title="AI 工具面板"
+          style={aiWorkbenchOpen ? { background: 'var(--ink)', color: 'var(--paper)' } : undefined}
+        >
+          ✦ AI
+        </button>
       </header>
 
-      <section className="ai-workbench">
+      {aiWorkbenchOpen && <section className="ai-workbench">
         {note.syncStatus === 'conflict' && (
           <div className="sync-conflict-panel">
             <span>{note.error ?? '服务器版本已更新，请处理当前本地草稿。'}</span>
@@ -963,6 +965,15 @@ export default function EditorPage() {
               {pdfJob.fileName && <span>{pdfJob.fileName}</span>}
               <span>任务 {pdfJob.jobId.slice(-8)}</span>
             </div>
+            {(pdfJob.status === 'queued' || pdfJob.status === 'parsing') && (
+              <div
+                className="pdf-job-progress"
+                role="progressbar"
+                aria-label="PDF 解析进度"
+              >
+                <div className="pdf-job-progress-bar" />
+              </div>
+            )}
             <div className="pdf-job-meta">
               {pdfJob.parser && <span>{pdfJob.parser}</span>}
               {typeof pdfJob.pages === 'number' && <span>{pdfJob.pages} 页</span>}
@@ -1059,18 +1070,22 @@ export default function EditorPage() {
             )}
           </div>
         )}
-      </section>
+      </section>}
 
       <Editor
         key={id}
         content={note.content}
         onUpdate={handleContentUpdate}
+        editable={!readingMode}
+        readingMode={readingMode}
         insertRequest={insertRequest}
         onSelectionChange={setSelectedText}
-        floatingToolbar={polishToolbar}
+        floatingToolbar={readingMode ? null : polishToolbar}
         collaboration={stableCollab}
         contentKey={contentKey}
         onImageUpload={handleImageUpload}
+        title={title}
+        onTitleChange={(value) => { setTitle(value); titleRef.current = value; scheduleSave(); }}
       />
 
       {/* Version History */}

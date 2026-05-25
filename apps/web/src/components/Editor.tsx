@@ -7,6 +7,10 @@ import { Table } from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
+import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import { common, createLowlight } from 'lowlight';
+import TaskList from '@tiptap/extension-task-list';
+import TaskItem from '@tiptap/extension-task-item';
 import { MathematicsDisplayMode } from '../lib/MathematicsDisplayMode';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
@@ -17,6 +21,7 @@ interface EditorProps {
   content: string;
   onUpdate: (html: string) => void;
   editable?: boolean;
+  readingMode?: boolean;
   insertRequest?: {
     id: number;
     html: string;
@@ -37,14 +42,20 @@ interface EditorProps {
   contentKey?: number;
   /** Called when the user selects an image file. Should upload and return the image URL. */
   onImageUpload?: (file: File) => Promise<string>;
+  /** Note title shown as large serif heading above editor body */
+  title?: string;
+  /** Called when the title input changes */
+  onTitleChange?: (value: string) => void;
 }
+
+const lowlight = createLowlight(common);
 
 function hasMeaningfulContent(content: string) {
   const compact = content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, '').trim();
   return compact.length > 0 || /<(h[1-6]|ul|ol|li|blockquote|pre|img|hr)\b/i.test(content);
 }
 
-export default function Editor({ content, onUpdate, editable = true, insertRequest, collaboration, onSelectionChange, floatingToolbar, contentKey, onImageUpload }: EditorProps) {
+export default function Editor({ content, onUpdate, editable = true, readingMode = false, insertRequest, collaboration, onSelectionChange, floatingToolbar, contentKey, onImageUpload, title, onTitleChange }: EditorProps) {
   const initialized = useRef(false);
   const lastInsertRequest = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -53,8 +64,12 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
-        codeBlock: { HTMLAttributes: { class: 'code-block' } },
+        codeBlock: false,
         history: collaboration ? false : undefined,
+      }),
+      CodeBlockLowlight.configure({
+        lowlight,
+        HTMLAttributes: { class: 'code-block' },
       }),
       Placeholder.configure({ placeholder: '开始编写笔记…' }),
       Image.configure({ inline: false, allowBase64: true }),
@@ -62,6 +77,13 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
       TableRow,
       TableHeader,
       TableCell,
+      TaskList.configure({
+        HTMLAttributes: { class: 'task-list' },
+      }),
+      TaskItem.configure({
+        nested: true,
+        HTMLAttributes: { class: 'task-item' },
+      }),
       MathematicsDisplayMode.configure({
         regex: /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g,
         katexOptions: {
@@ -159,179 +181,185 @@ export default function Editor({ content, onUpdate, editable = true, insertReque
   if (!editor) return null;
 
   return (
-    <div className="editor-wrapper">
-      <div className="editor-toolbar">
-        <div className="toolbar-group">
-          <button
-            type="button"
-            className={editor.isActive('heading', { level: 1 }) ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-            title="标题 1"
-          >
-            H1
-          </button>
-          <button
-            type="button"
-            className={editor.isActive('heading', { level: 2 }) ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-            title="标题 2"
-          >
-            H2
-          </button>
-          <button
-            type="button"
-            className={editor.isActive('heading', { level: 3 }) ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-            title="标题 3"
-          >
-            H3
-          </button>
-        </div>
+    <div className={`editor-wrapper${readingMode ? ' reading-mode' : ''}`}>
+      <div className="format-bar">
+        <button
+          type="button"
+          className={`fmt-btn fmt-heading${editor.isActive('heading', { level: 1 }) ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+          title="标题 1"
+        >H1</button>
+        <button
+          type="button"
+          className={`fmt-btn fmt-heading${editor.isActive('heading', { level: 2 }) ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+          title="标题 2"
+        >H2</button>
+        <button
+          type="button"
+          className={`fmt-btn fmt-heading${editor.isActive('heading', { level: 3 }) ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+          title="标题 3"
+        >H3</button>
 
-        <div className="toolbar-divider" />
+        <div className="fmt-divider" />
 
-        <div className="toolbar-group">
-          <button
-            type="button"
-            className={editor.isActive('bold') ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleBold().run()}
-            title="加粗 (Ctrl+B)"
-          >
-            <strong>B</strong>
-          </button>
-          <button
-            type="button"
-            className={editor.isActive('italic') ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleItalic().run()}
-            title="斜体 (Ctrl+I)"
-          >
-            <em>I</em>
-          </button>
-          <button
-            type="button"
-            className={editor.isActive('strike') ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleStrike().run()}
-            title="删除线"
-          >
-            <s>S</s>
-          </button>
-          <button
-            type="button"
-            className={editor.isActive('code') ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleCode().run()}
-            title="行内代码"
-          >
-            {'</>'}
-          </button>
-        </div>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('bold') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleBold().run()}
+          title="加粗 (Ctrl+B)"
+        ><strong>B</strong></button>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('italic') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleItalic().run()}
+          title="斜体 (Ctrl+I)"
+        ><em>I</em></button>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('strike') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleStrike().run()}
+          title="删除线"
+        ><s>S</s></button>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('code') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleCode().run()}
+          title="行内代码"
+        >{'</>'}</button>
 
-        <div className="toolbar-divider" />
+        <div className="fmt-divider" />
 
-        <div className="toolbar-group">
-          <button
-            type="button"
-            className={editor.isActive('bulletList') ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleBulletList().run()}
-            title="无序列表"
-          >
-            •
-          </button>
-          <button
-            type="button"
-            className={editor.isActive('orderedList') ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleOrderedList().run()}
-            title="有序列表"
-          >
-            1.
-          </button>
-          <button
-            type="button"
-            className={editor.isActive('blockquote') ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleBlockquote().run()}
-            title="引用"
-          >
-            "
-          </button>
-          <button
-            type="button"
-            className={editor.isActive('codeBlock') ? 'active' : ''}
-            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-            title="代码块"
-          >
-            {'{ }'}
-          </button>
-        </div>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('bulletList') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleBulletList().run()}
+          title="无序列表"
+        >•</button>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('orderedList') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          title="有序列表"
+        >1.</button>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('taskList') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleTaskList().run()}
+          title="任务列表"
+        >☑</button>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('blockquote') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleBlockquote().run()}
+          title="引用"
+        >"</button>
+        <button
+          type="button"
+          className={`fmt-btn${editor.isActive('codeBlock') ? ' active' : ''}`}
+          onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+          title="代码块"
+        >{'{ }'}</button>
+        {editor.isActive('codeBlock') && (
+            <select
+              className="code-lang-select"
+              value={editor.getAttributes('codeBlock').language || ''}
+              onChange={(e) => {
+                editor.chain().focus().updateAttributes('codeBlock', {
+                  language: e.target.value,
+                }).run();
+              }}
+              title="代码语言"
+            >
+              <option value="">自动检测</option>
+              <option value="javascript">JavaScript</option>
+              <option value="typescript">TypeScript</option>
+              <option value="python">Python</option>
+              <option value="java">Java</option>
+              <option value="cpp">C++</option>
+              <option value="c">C</option>
+              <option value="csharp">C#</option>
+              <option value="go">Go</option>
+              <option value="rust">Rust</option>
+              <option value="html">HTML</option>
+              <option value="css">CSS</option>
+              <option value="sql">SQL</option>
+              <option value="json">JSON</option>
+              <option value="yaml">YAML</option>
+              <option value="bash">Bash</option>
+              <option value="markdown">Markdown</option>
+              <option value="xml">XML</option>
+              <option value="php">PHP</option>
+              <option value="ruby">Ruby</option>
+              <option value="swift">Swift</option>
+              <option value="kotlin">Kotlin</option>
+              <option value="shell">Shell</option>
+            </select>
+          )}
 
-        <div className="toolbar-divider" />
+        <div className="fmt-divider" />
 
-        <div className="toolbar-group">
-          <button
-            type="button"
-            onClick={() => editor.chain().focus().setHorizontalRule().run()}
-            title="分割线"
-          >
-            ―
-          </button>
-          <button
-            type="button"
-            onClick={() => editor.chain().focus().undo().run()}
-            disabled={!editor.can().undo()}
-            title="撤销 (Ctrl+Z)"
-          >
-            ↶
-          </button>
-          <button
-            type="button"
-            onClick={() => editor.chain().focus().redo().run()}
-            disabled={!editor.can().redo()}
-            title="重做 (Ctrl+Shift+Z)"
-          >
-            ↷
-          </button>
-        </div>
+        <button type="button" className="fmt-btn"
+          onClick={() => editor.chain().focus().setHorizontalRule().run()}
+          title="分割线"
+        >―</button>
+        <button type="button" className="fmt-btn"
+          onClick={() => editor.chain().focus().undo().run()}
+          disabled={!editor.can().undo()}
+          title="撤销 (Ctrl+Z)"
+        >↶</button>
+        <button type="button" className="fmt-btn"
+          onClick={() => editor.chain().focus().redo().run()}
+          disabled={!editor.can().redo()}
+          title="重做 (Ctrl+Shift+Z)"
+        >↷</button>
 
-        <div className="toolbar-divider" />
+        <div className="fmt-divider" />
 
-        <div className="toolbar-group">
-          <button
-            type="button"
-            onClick={() => imageInputRef.current?.click()}
-            title="插入图片"
-          >
-            🖼
-          </button>
-          <button
-            type="button"
-            onClick={insertMathBlock}
-            title="插入数学公式"
-          >
-            ∑
-          </button>
-          <button
-            type="button"
-            onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
-            title="插入表格"
-          >
-            ⊞
-          </button>
-        </div>
+        <button type="button" className="fmt-btn"
+          onClick={() => imageInputRef.current?.click()}
+          title="插入图片"
+        >🖼</button>
+        <button type="button" className="fmt-btn"
+          onClick={insertMathBlock}
+          title="插入数学公式"
+        >∑</button>
+        <button type="button" className="fmt-btn"
+          onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+          title="插入表格"
+        >⊞</button>
 
-        <input
-          ref={imageInputRef}
-          type="file"
-          accept="image/*"
-          style={{ display: 'none' }}
-          onChange={handleImageFileChange}
-        />
+        {floatingToolbar && (
+          <div className="toolbar-floating-slot" style={{ marginLeft: 'auto' }}>
+            {floatingToolbar}
+          </div>
+        )}
       </div>
 
-      {floatingToolbar && (
-        <div className="toolbar-floating-slot">
-          {floatingToolbar}
-        </div>
-      )}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={handleImageFileChange}
+      />
 
-      <EditorContent editor={editor} className="editor-content" />
+      <div className="editor-scroll">
+        <div className="editor-canvas">
+          {title !== undefined && (
+            <input
+              className="editor-title"
+              type="text"
+              value={title}
+              onChange={(e) => onTitleChange?.(e.target.value)}
+              placeholder="笔记标题"
+              readOnly={readingMode}
+            />
+          )}
+          <EditorContent editor={editor} className="editor-content" />
+        </div>
+      </div>
     </div>
   );
 }

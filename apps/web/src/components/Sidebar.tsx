@@ -133,8 +133,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       {/* Footer */}
       <div className="sidebar-bottom">
         <ThemeToggle />
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="sidebar-foot-row">
           <button
             className="user-chip"
             onClick={syncNow}
