@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { ApiError } from '../lib/api';
 import { isElectron } from '../lib/electronConfig';
+import BrandMark from '../components/BrandMark';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -46,8 +47,8 @@ export default function LoginPage() {
       {/* Left art panel */}
       <div className="auth-art">
         <div className="brand">
-          <div className="brand-mark">N</div>
-          <div className="brand-name">Notebook <em>by Muffin</em></div>
+          <div className="brand-mark brand-mark-svg"><BrandMark size={28} /></div>
+          <div className="brand-name">Quire <em>· 集册</em></div>
         </div>
         <div className="quote">
           写作是思考的副产物。<br />

@@ -35,7 +35,11 @@ const StopIcon = () => (
   </svg>
 );
 
-export default function AiPanel() {
+interface AiPanelProps {
+  onResizeStart?: (e: React.MouseEvent) => void;
+}
+
+export default function AiPanel({ onResizeStart }: AiPanelProps) {
   const {
     open,
     setOpen,
@@ -87,6 +91,9 @@ export default function AiPanel() {
 
   return (
     <aside className="ai-panel">
+      {onResizeStart && (
+        <div className="ai-panel-resize-handle" onMouseDown={onResizeStart} />
+      )}
       <div className="ai-header">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div className="ai-title">

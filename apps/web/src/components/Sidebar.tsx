@@ -10,14 +10,22 @@ import BrandMark from './BrandMark';
 interface SidebarProps {
   open?: boolean;
   onClose?: () => void;
+  onResizeStart?: (e: React.MouseEvent) => void;
 }
 
-export default function Sidebar({ open, onClose }: SidebarProps) {
+export default function Sidebar({ open, onClose, onResizeStart }: SidebarProps) {
   const { user, logout } = useAuth();
   const { notes, createNote, online, syncing, syncNow } = useNotes();
   const navigate = useNavigate();
   const [creating, setCreating] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [filter, setFilter] = React.useState<'all' | 'starred' | 'shared' | 'recent'>('all');
+
+  const currentUserId = user?.id;
+  const starredCount = notes.filter((n) => (n as any).starred).length;
+  const sharedCount = currentUserId
+    ? notes.filter((n) => (n as any).ownerId && (n as any).ownerId !== currentUserId).length
+    : 0;
 
   async function handleNewNote() {
     if (creating) return;
@@ -54,7 +62,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
   const syncLabel = !online ? '离线' : syncing ? '同步中…' : '已同步 · 在线';
 
   return (
-    <aside className={`sidebar${open ? ' sidebar-open' : ''}`}>
+    <aside className={`sidebar${open ? ' sidebar-open' : ''}`} style={{ position: 'relative' }}>
       <div className="sidebar-top">
         {/* Brand */}
         <div className="brand">
@@ -110,18 +118,49 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
       {/* Nav filters */}
       <div className="sidebar-nav">
-        <button className="nav-item active">
+        <button
+          className={`nav-item${filter === 'all' ? ' active' : ''}`}
+          onClick={() => setFilter('all')}
+        >
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="14" height="14"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3M5.5 9h5M5.5 11.5h5M5.5 6.5h2.5" strokeLinecap="round"/></svg>
           全部笔记
           <span className="nav-item-count">{notes.length}</span>
         </button>
+        <button
+          className={`nav-item${filter === 'starred' ? ' active' : ''}`}
+          onClick={() => setFilter('starred')}
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" width="14" height="14"><path d="M8 2l1.9 3.85L14 6.45l-3 2.92.7 4.13L8 11.55 4.3 13.5 5 9.37 2 6.45l4.1-.6L8 2z"/></svg>
+          收藏
+          <span className="nav-item-count">{starredCount}</span>
+        </button>
+        <button
+          className={`nav-item${filter === 'shared' ? ' active' : ''}`}
+          onClick={() => setFilter('shared')}
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><circle cx="4" cy="8" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="12" cy="12" r="2"/><path d="M5.7 7l4.6-2.5M5.7 9l4.6 2.5"/></svg>
+          共享给我
+          <span className="nav-item-count">{sharedCount}</span>
+        </button>
+        <button
+          className={`nav-item${filter === 'recent' ? ' active' : ''}`}
+          onClick={() => setFilter('recent')}
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" width="14" height="14"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>
+          最近编辑
+        </button>
       </div>
 
       {/* Notes section */}
-      <div className="section-label">最近笔记</div>
+      <div className="section-label">
+        {filter === 'starred' ? '收藏笔记'
+          : filter === 'shared' ? '共享给我'
+          : filter === 'recent' ? '最近编辑'
+          : '最近笔记'}
+      </div>
 
       <div className="sidebar-notes">
-        <NoteList />
+        <NoteList filter={filter} />
       </div>
 
       {/* Footer */}
@@ -153,6 +192,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           </button>
         </div>
       </div>
+      {onResizeStart && (
+        <div className="sidebar-resize-handle" onMouseDown={onResizeStart} />
+      )}
     </aside>
   );
 }

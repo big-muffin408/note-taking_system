@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { ApiError } from '../lib/api';
+import BrandMark from '../components/BrandMark';
 
 export default function RegisterPage() {
   const { register, requestVerificationCode } = useAuth();
@@ -81,8 +82,8 @@ export default function RegisterPage() {
     <div className="auth-page">
       <div className="auth-art">
         <div className="brand">
-          <div className="brand-mark">N</div>
-          <div className="brand-name">Notebook <em>by Muffin</em></div>
+          <div className="brand-mark brand-mark-svg"><BrandMark size={28} /></div>
+          <div className="brand-name">Quire <em>· 集册</em></div>
         </div>
         <div className="quote">
           好的笔记系统，<br />

@@ -161,14 +161,81 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+def clean_latex_spaces(latex: str) -> str:
+    """Remove spurious character-level spaces inserted by PDF parsers (e.g. MinerU).
+
+    Converts ``\\operatorname { m i n }`` → ``\\operatorname{min}`` and
+    ``_ { \\Delta \\Phi }`` → ``_{\\Delta\\Phi}`` while preserving meaningful
+    math spaces like ``x + y``.
+    """
+    prev = None
+    while prev != latex:
+        prev = latex
+        # Collapse tokenized content inside braces where each "word" is a single
+        # char or a \command: { m i n } → {min}, { \Delta \Phi } → {\Delta\Phi}
+        token = r"(?:[a-zA-Z0-9]|\\[a-zA-Z]+)"
+        latex = re.sub(
+            r"\{\s*(" + token + r"(?:\s+" + token + r")*)\s*\}",
+            lambda m: "{" + m.group(1).replace(" ", "") + "}",
+            latex,
+        )
+    # Remove spaces between a command name and its opening brace:
+    # \operatorname { → \operatorname{
+    latex = re.sub(r"(\\[a-zA-Z]+)\s+\{", r"\1{", latex)
+    return latex
+
+
+def _protect_math_blocks(text: str) -> tuple[str, dict[str, str]]:
+    """Extract ``$$…$$`` and ``$…$`` blocks to shield them from markdown processing.
+
+    Returns the text with placeholders and a mapping to restore later.
+    """
+    placeholders: dict[str, str] = {}
+    counter = 0
+
+    def _replace(m: re.Match) -> str:
+        nonlocal counter
+        key = f"\x00MATH{counter}\x00"
+        placeholders[key] = m.group(0)
+        counter += 1
+        return key
+
+    # Display math first ($$…$$), then inline math ($…$)
+    text = re.sub(r"\$\$[\s\S]+?\$\$", _replace, text)
+    text = re.sub(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)", _replace, text)
+    return text, placeholders
+
+
+def _restore_math_blocks(text: str, placeholders: dict[str, str]) -> str:
+    for key, value in placeholders.items():
+        text = text.replace(key, value)
+    return text
+
+
 def markdown_to_html(markdown: str) -> str:
+    # Clean up LaTeX spacing artefacts from PDF parsers before any conversion.
+    markdown = re.sub(
+        r"\$\$[\s\S]+?\$\$",
+        lambda m: clean_latex_spaces(m.group(0)),
+        markdown,
+    )
+    markdown = re.sub(
+        r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)",
+        lambda m: clean_latex_spaces(m.group(0)),
+        markdown,
+    )
+
+    # Protect math blocks from being mangled by the markdown converter.
+    markdown, math_placeholders = _protect_math_blocks(markdown)
+
     if markdown_lib:
         try:
-            return markdown_lib.markdown(
+            html_out = markdown_lib.markdown(
                 markdown,
                 extensions=["extra", "sane_lists"],
                 output_format="html5",
             )
+            return _restore_math_blocks(html_out, math_placeholders)
         except Exception:
             pass
 
@@ -183,7 +250,7 @@ def markdown_to_html(markdown: str) -> str:
             blocks.append(f"<h2>{escaped[3:].strip()}</h2>")
         else:
             blocks.append(f"<p>{escaped.replace(chr(10), '<br>')}</p>")
-    return "".join(blocks) or "<p></p>"
+    return _restore_math_blocks("".join(blocks) or "<p></p>", math_placeholders)
 
 
 _chroma_client: chromadb.PersistentClient | None = None

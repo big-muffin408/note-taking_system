@@ -908,6 +908,7 @@ export default function EditorPage() {
     ? `${user?.displayName ?? '我'} + ${otherCollaborators.length} 位协作者`
     : (user?.displayName ?? '我');
 
+  const noteTags = ((note as any)?.tags as string[] | undefined) ?? [];
   const editorMeta = (
     <div className="editor-meta">
       {updatedLabel && <span>{updatedLabel}</span>}
@@ -915,6 +916,9 @@ export default function EditorPage() {
       <span>{wordCount.toLocaleString()} 字</span>
       <span>·</span>
       <span>{collaboratorsLabel}</span>
+      {noteTags.map((t) => (
+        <span key={t} className="tag">{t}</span>
+      ))}
     </div>
   );
 
@@ -935,10 +939,6 @@ export default function EditorPage() {
             <><span className="pulse" /> 已保存 {lastSaved}</>
           ) : null}
         </div>
-
-        <span className={`collab-status collab-status-${collabStatus}`} style={{ fontSize: '11px', padding: '3px 8px' }}>
-          {getStatusText(collabStatus, collaboratorCount)}
-        </span>
 
         {collaborators.length > 0 && (
           <div className="presence" title={collaborators.map((c) => c.name).join(', ')}>

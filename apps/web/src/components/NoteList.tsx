@@ -2,6 +2,13 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, useNavigate, useParams } from 'react-router-dom';
 import { useNotes, type NoteSummary } from '../contexts/NotesContext';
+import { useAuth } from '../contexts/AuthContext';
+
+export type NoteFilter = 'all' | 'starred' | 'shared' | 'recent';
+
+interface NoteListProps {
+  filter?: NoteFilter;
+}
 
 function getSnippet(note: NoteSummary): string {
   const raw = (note as any).content ?? (note as any).snippet ?? '';
@@ -10,9 +17,29 @@ function getSnippet(note: NoteSummary): string {
   return text.slice(0, 80);
 }
 
-export default function NoteList() {
+export default function NoteList({ filter = 'all' }: NoteListProps) {
   const { notes, loading, deleteNote } = useNotes();
+  const { user } = useAuth();
   const navigate = useNavigate();
+
+  const filteredNotes = React.useMemo(() => {
+    if (filter === 'starred') {
+      return notes.filter((n) => (n as any).starred);
+    }
+    if (filter === 'shared') {
+      if (!user?.id) return [];
+      return notes.filter((n) => {
+        const ownerId = (n as any).ownerId;
+        return ownerId && ownerId !== user.id;
+      });
+    }
+    if (filter === 'recent') {
+      return [...notes].sort((a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
+    }
+    return notes;
+  }, [notes, filter, user?.id]);
   const { id: activeNoteId } = useParams<{ id: string }>();
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [confirmNote, setConfirmNote] = React.useState<NoteSummary | null>(null);
@@ -43,6 +70,13 @@ export default function NoteList() {
     return <div className="note-list-empty">暂无笔记，点击上方按钮创建</div>;
   }
 
+  if (filteredNotes.length === 0) {
+    const emptyText = filter === 'starred' ? '还没有收藏的笔记'
+      : filter === 'shared' ? '没有共享给你的笔记'
+      : '暂无笔记';
+    return <div className="note-list-empty">{emptyText}</div>;
+  }
+
   return (
     <nav className="note-list" aria-label="笔记列表">
       {error && (
@@ -51,7 +85,7 @@ export default function NoteList() {
           <button type="button" className="note-list-error-dismiss" onClick={() => setError(null)}>×</button>
         </div>
       )}
-      {notes.map((note) => (
+      {filteredNotes.map((note) => (
         <div className="note-item-row" key={note.id}>
           <NavLink
             to={`/note/${note.id}`}

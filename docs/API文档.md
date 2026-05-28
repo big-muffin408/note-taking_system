@@ -467,7 +467,52 @@ Authorization: Bearer <token>
 }
 ```
 
+### 创建版本快照
+
+```
+POST /api/doc/notes/:id/versions
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>
+```
+
+**响应示例**:
+```json
+{
+  "id": "version-id",
+  "noteId": "note-id",
+  "label": "手动快照",
+  "createdAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+### 恢复版本
+
+```
+POST /api/doc/notes/:id/versions/:versionId/restore
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>
+```
+
+**说明**: 恢复指定版本，会自动快照当前状态后再恢复。如果版本包含 Yjs 更新数据，会写入协同状态；否则恢复 HTML 内容。
+
+**响应示例**:
+```json
+{
+  "restored": true,
+  "noteId": "note-id",
+  "versionId": "version-id"
+}
+```
+
 ## AI 服务 (AI Service)
+
+> **注意**: AI 服务端点需要通过 `AI_SERVICE_SECRET` 进行服务间认证。请求头：`Authorization: Bearer <AI_SERVICE_SECRET>`。前端通过 document-service 代理调用，无需直接配置此 token。
 
 ### 健康检查
 
