@@ -2108,6 +2108,13 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .editor-content .tiptap .Tiptap-mathematics--editable .Tiptap-mathematics-editor { display: block; }
 .editor-content .tiptap .Tiptap-mathematics:not(.Tiptap-mathematics--editable) .Tiptap-mathematics-render { display: inline-block; }
 .editor-content .tiptap .Tiptap-mathematics:not(.Tiptap-mathematics--editable) .Tiptap-mathematics-editor { display: none; }
+.editor-content .tiptap .Tiptap-mathematics-render.Tiptap-mathematics-error {
+  color: #cc0033;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  background: rgba(204, 0, 51, 0.06);
+}
 
 /* Collaboration cursors */
 .collaboration-cursor__caret {

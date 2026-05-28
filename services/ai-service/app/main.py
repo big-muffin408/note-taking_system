@@ -168,20 +168,44 @@ def clean_latex_spaces(latex: str) -> str:
     ``_ { \\Delta \\Phi }`` → ``_{\\Delta\\Phi}`` while preserving meaningful
     math spaces like ``x + y``.
     """
+    # Remove spaces between a command name and its opening brace first so the
+    # brace-collapse below sees a consistent form: \operatorname { → \operatorname{
+    latex = re.sub(r"(\\[a-zA-Z]+)\s+\{", r"\1{", latex)
+
+    # PDF parsers (MinerU) often emit ``\left{`` / ``\right}`` without escaping
+    # the brace as a delimiter; KaTeX needs ``\left\{`` / ``\right\}`` or it
+    # treats ``{`` as starting a group and errors on the matching ``\right}``.
+    latex = re.sub(r"\\left\{", r"\\left\\{", latex)
+    latex = re.sub(r"\\right\}", r"\\right\\}", latex)
+
+    # Set notation after membership / subset / etc.: ``\in { ... }`` should be
+    # ``\in \{ ... \}`` — otherwise KaTeX silently swallows the braces. We only
+    # touch non-nested ``{...}`` so subscripts and ``\mathbb{R}`` are safe.
+    latex = re.sub(
+        r"\\(in|notin|subset|subseteq|supset|supseteq|cup|cap)(\b\s*)\{([^{}]*)\}",
+        r"\\\1\2\\{\3\\}",
+        latex,
+    )
+
+    # MinerU tends to space every single token, so once we know a brace's
+    # content is "all single-char tokens or \commands separated by whitespace",
+    # joining them is safe and matches LaTeX semantics. Allow non-letter symbols
+    # (parens, commas, operators, etc.) as single-char tokens too so that
+    # ``{ p ( m ) }`` and ``{ x , m \sim \mathcal { G } ( p ( m ) ) }`` collapse.
+    # Meaningful spaces in math (``x + y``) survive because ``+`` is just a
+    # token here and joining "x+y" is equivalent in math mode.
+    # \text{...} is excluded because spaces inside text mode are literal.
+    token = r"(?:\\[a-zA-Z]+\*?\{[^{}]*\}|\\[a-zA-Z]+\*?|[^\s{}\\])"
+    pattern = re.compile(r"(?<!\\text)\{\s*(" + token + r"(?:\s+" + token + r")*)\s*\}")
     prev = None
     while prev != latex:
         prev = latex
-        # Collapse tokenized content inside braces where each "word" is a single
-        # char or a \command: { m i n } → {min}, { \Delta \Phi } → {\Delta\Phi}
-        token = r"(?:[a-zA-Z0-9]|\\[a-zA-Z]+)"
-        latex = re.sub(
-            r"\{\s*(" + token + r"(?:\s+" + token + r")*)\s*\}",
-            lambda m: "{" + m.group(1).replace(" ", "") + "}",
-            latex,
-        )
-    # Remove spaces between a command name and its opening brace:
-    # \operatorname { → \operatorname{
-    latex = re.sub(r"(\\[a-zA-Z]+)\s+\{", r"\1{", latex)
+        latex = pattern.sub(lambda m: "{" + re.sub(r"\s+", "", m.group(1)) + "}", latex)
+
+    # Also collapse the OUTER ``\command { ... }`` content where the content
+    # itself contains balanced groups we've already cleaned. Skip — the iterative
+    # inner-first pass above already handles nested braces from the innermost
+    # group outward, so by fixpoint everything is normalized.
     return latex
 
 

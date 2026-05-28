@@ -12,6 +12,7 @@ import { common, createLowlight } from 'lowlight';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import { MathematicsDisplayMode } from '../lib/MathematicsDisplayMode';
+import { sanitizeMathHtml } from '../lib/markdownConvert';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
 import type * as Y from 'yjs';
@@ -139,7 +140,7 @@ export default function Editor({ content, onUpdate, editable = true, readingMode
     if (!editor || collaboration) return;
 
     if (content && !initialized.current) {
-      editor.commands.setContent(content);
+      editor.commands.setContent(sanitizeMathHtml(content));
       initialized.current = true;
     }
   }, [editor, content, collaboration]);
@@ -148,7 +149,7 @@ export default function Editor({ content, onUpdate, editable = true, readingMode
   useEffect(() => {
     if (contentKey !== undefined && editor) {
       initialized.current = false;
-      editor.commands.setContent(content);
+      editor.commands.setContent(sanitizeMathHtml(content));
       initialized.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -160,7 +161,7 @@ export default function Editor({ content, onUpdate, editable = true, readingMode
 
     const seedIfEmpty = (synced: boolean) => {
       if (!synced || initialized.current || !editor.isEmpty) return;
-      editor.commands.setContent(content, false);
+      editor.commands.setContent(sanitizeMathHtml(content), false);
       initialized.current = true;
       onUpdate(editor.getHTML());
     };

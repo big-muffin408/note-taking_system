@@ -62,6 +62,23 @@ const defaultShouldRender = (state: EditorState, pos: number) => {
   return $pos.parent.type.name !== 'codeBlock'
 }
 
+// PDF parsers (MinerU) often emit `\left{` / `\right}` where KaTeX needs the
+// brace to be escaped as a delimiter. Without this, KaTeX treats `{` as a
+// group-start and fails parsing the rest of the expression.
+function normalizeLatexDelimiters(content: string): string {
+  return content
+    .replace(/\\left\{/g, '\\left\\{')
+    .replace(/\\right\}/g, '\\right\\}')
+    // Set notation: ``\in { ... }`` (and siblings) should be ``\in \{ ... \}``;
+    // otherwise KaTeX silently swallows the braces and renders ``\in 1,..,K``.
+    // Restricted to non-nested braces so we don't touch ``\frac{a}{b}`` or
+    // subscripts like ``x_{n}``.
+    .replace(
+      /\\(in|notin|subset|subseteq|supset|supseteq|cup|cap)(\b\s*)\{([^{}]*)\}/g,
+      '\\$1$2\\{$3\\}',
+    )
+}
+
 export const MathematicsDisplayMode = Extension.create<{
   regex: RegExp
   katexOptions?: KatexOptions
@@ -174,13 +191,22 @@ export const MathematicsDisplayMode = Extension.create<{
                               element.classList.add('Tiptap-mathematics-render--editable')
                             }
 
+                            // KaTeX's \tag (and other equation-numbering macros)
+                            // only works with displayMode: true. If the regex
+                            // matched as inline ($…$) but the content uses
+                            // \tag, render as display anyway — otherwise KaTeX
+                            // throws and the user sees nothing useful.
+                            const needsDisplay = /\\tag\b|\\notag\b|\\begin\{align/.test(content!)
+                            const useDisplayMode = isDisplayMath || needsDisplay
+                            const normalized = normalizeLatexDelimiters(content!)
                             try {
-                              katex.render(content!, element, {
+                              katex.render(normalized, element, {
                                 ...katexOptions,
-                                displayMode: isDisplayMath,
+                                displayMode: useDisplayMode,
                               })
-                            } catch {
-                              element.innerHTML = content!
+                            } catch (err) {
+                              element.classList.add('Tiptap-mathematics-error')
+                              element.textContent = err instanceof Error ? err.message : String(err)
                             }
 
                             return element
