@@ -1244,7 +1244,7 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
   max-width: 400px;
 }
 
-.welcome-content svg { margin-bottom: 20px; }
+.welcome-content svg { margin: 0 auto 20px; }
 
 .welcome-content h2 {
   font-family: var(--serif);

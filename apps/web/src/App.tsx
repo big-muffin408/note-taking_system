@@ -11,6 +11,7 @@ import AdminPage from './pages/AdminPage';
 import MainLayout from './components/MainLayout';
 import SettingsDialog from './components/SettingsDialog';
 import { isElectron, isBackendConfigured } from './lib/electronConfig';
+import BrandMark from './components/BrandMark';
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -55,11 +56,8 @@ function WelcomePage() {
   return (
     <div className="welcome-page">
       <div className="welcome-content">
-        <svg width="48" height="48" viewBox="0 0 32 32" fill="none">
-          <rect width="32" height="32" rx="8" fill="#4f46e5" />
-          <path d="M9 10h14M9 16h10M9 22h12" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-        </svg>
-        <h2>欢迎使用 AI 协作笔记系统</h2>
+        <BrandMark size={48} />
+        <h2>欢迎使用 Quire·集册</h2>
         <p>在左侧选择一篇笔记开始编辑，或点击「新建笔记」创建一篇新的笔记。</p>
       </div>
     </div>
