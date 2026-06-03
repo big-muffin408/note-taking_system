@@ -3253,6 +3253,84 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
   animation: blink 1s infinite;
   margin-left: 1px;
 }
+
+/* AI panel markdown rendering */
+.ai-panel .markdown-body {
+  white-space: normal;
+  word-break: break-word;
+}
+.ai-panel .markdown-body > *:first-child { margin-top: 0; }
+.ai-panel .markdown-body > *:last-child { margin-bottom: 0; }
+.ai-panel .markdown-body h1,
+.ai-panel .markdown-body h2,
+.ai-panel .markdown-body h3,
+.ai-panel .markdown-body h4 {
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+  line-height: 1.3;
+}
+.ai-panel .markdown-body h1 { font-size: 1.15em; }
+.ai-panel .markdown-body h2 { font-size: 1.05em; }
+.ai-panel .markdown-body h3 { font-size: 1em; }
+.ai-panel .markdown-body p { margin: 0.5em 0; }
+.ai-panel .markdown-body ul,
+.ai-panel .markdown-body ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+.ai-panel .markdown-body li { margin: 0.15em 0; }
+.ai-panel .markdown-body code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--paper-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.ai-panel .markdown-body pre {
+  background: var(--paper-3);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+.ai-panel .markdown-body pre code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ai-panel .markdown-body blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+  color: var(--ink-3);
+  margin: 0.5em 0;
+}
+.ai-panel .markdown-body table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 12px;
+  width: 100%;
+}
+.ai-panel .markdown-body th,
+.ai-panel .markdown-body td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+}
+.ai-panel .markdown-body th {
+  background: var(--paper-3);
+  font-weight: 600;
+}
+.ai-panel .markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--line-soft);
+  margin: 0.8em 0;
+}
+.ai-panel .markdown-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.ai-panel .markdown-body a:hover { text-decoration: underline; }
 @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
 .ai-input-wrap {

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAiPanel } from '../contexts/AiPanelContext';
+import { markdownToHtml } from '../lib/markdownConvert';
 
 const SparkleIcon = () => (
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" width="14" height="14">
@@ -134,18 +135,23 @@ export default function AiPanel({ onResizeStart }: AiPanelProps) {
             {messages.map((m, i) => (
               <div key={i} className={`chat-msg ${m.who}`}>
                 <div className="who">{m.who === 'user' ? '你' : 'Quire AI'}</div>
-                <div className={`bubble${m.streaming ? ' cursor-blink' : ''}`}>
-                  {m.text}
-                  {m.sources && !m.streaming && m.sources.slice(0, 3).map((s, idx) => (
-                    <span
-                      key={`${s.sourceName}-${s.chunkIndex}-${idx}`}
-                      className="cite"
-                      title={s.textPreview || s.text}
-                    >
-                      §{s.chunkIndex + 1}
-                    </span>
-                  ))}
-                </div>
+                {m.who === 'user' ? (
+                  <div className="bubble">{m.text}</div>
+                ) : (
+                  <div
+                    className={`bubble markdown-body${m.streaming ? ' cursor-blink' : ''}`}
+                    dangerouslySetInnerHTML={{ __html: markdownToHtml(m.text) }}
+                  />
+                )}
+                {m.who === 'ai' && m.sources && !m.streaming && m.sources.slice(0, 3).map((s, idx) => (
+                  <span
+                    key={`${s.sourceName}-${s.chunkIndex}-${idx}`}
+                    className="cite"
+                    title={s.textPreview || s.text}
+                  >
+                    §{s.chunkIndex + 1}
+                  </span>
+                ))}
               </div>
             ))}
           </>
@@ -177,9 +183,10 @@ export default function AiPanel({ onResizeStart }: AiPanelProps) {
               </div>
 
               {summaryDisplay ? (
-                <div className={aiLoading === 'summary' ? 'cursor-blink' : ''} style={{ whiteSpace: 'pre-wrap' }}>
-                  {summaryDisplay}
-                </div>
+                <div
+                  className={`markdown-body${aiLoading === 'summary' ? ' cursor-blink' : ''}`}
+                  dangerouslySetInnerHTML={{ __html: markdownToHtml(summaryDisplay) }}
+                />
               ) : (
                 <div style={{ color: 'var(--ink-4)', fontSize: 12 }}>
                   {aiLoading === 'summary' ? '生成中…' : '点击右上角刷新按钮生成摘要。'}
@@ -266,9 +273,11 @@ export default function AiPanel({ onResizeStart }: AiPanelProps) {
                     </button>
                   </div>
                 </div>
-                <div className={aiLoading === 'polish' ? 'cursor-blink' : ''} style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>
-                  {polishDisplay}
-                </div>
+                <div
+                  className={`markdown-body${aiLoading === 'polish' ? ' cursor-blink' : ''}`}
+                  style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}
+                  dangerouslySetInnerHTML={{ __html: markdownToHtml(polishDisplay) }}
+                />
                 {aiLoading !== 'polish' && (
                   <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
                     <button className="chip active" onClick={() => insertResult(polishDisplay)}>✓ 插入</button>

@@ -107,6 +107,22 @@ export async function streamAI(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let acc = '';
+
+  // Guarantee exactly one terminal callback (onDone | onError) so callers
+  // can always reset their loading state, even if the stream ends without a
+  // `done` event or `reader.read()` throws mid-stream.
+  let terminated = false;
+  const finish = (result: Record<string, unknown>) => {
+    if (terminated) return;
+    terminated = true;
+    callbacks.onDone(result);
+  };
+  const fail = (err: Error) => {
+    if (terminated) return;
+    terminated = true;
+    callbacks.onError?.(err);
+  };
 
   try {
     while (true) {
@@ -128,9 +144,11 @@ export async function streamAI(
             if (currentEvent === 'meta') {
               callbacks.onMeta?.(parsed);
             } else if (currentEvent === 'chunk') {
-              callbacks.onChunk(parsed.chunk ?? '');
+              const chunk = parsed.chunk ?? '';
+              acc += chunk;
+              callbacks.onChunk(chunk);
             } else if (currentEvent === 'done') {
-              callbacks.onDone(parsed);
+              finish(parsed);
             }
           } catch {
             // ignore malformed JSON
@@ -139,6 +157,11 @@ export async function streamAI(
         }
       }
     }
+    // Stream closed without an explicit `done` event — fall back to the
+    // accumulated text so the caller still gets a terminal callback.
+    finish({ content: acc });
+  } catch (err) {
+    fail(err instanceof Error ? err : new Error(String(err)));
   } finally {
     reader.releaseLock();
   }
