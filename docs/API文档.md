@@ -124,6 +124,22 @@ Authorization: Bearer <token>
 }
 ```
 
+### 发起 Google OAuth 登录
+
+```
+GET /api/user/google
+```
+
+**说明**: 重定向到 Google 授权页面。需要配置 `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`，否则返回“Google 登录尚未配置”。
+
+### Google OAuth 回调
+
+```
+GET /api/user/google/callback?code=...&state=...
+```
+
+**说明**: Google 授权后回调此接口。user-service 用 `code` 换取 token、读取用户信息、创建或绑定本地用户，然后重定向回前端 `/auth/callback#token=<jwt>`。前端 `OAuthCallbackPage` 从 hash 中读取 JWT 并调用 `/api/user/me`。
+
 ### 创建分享
 
 ```
@@ -200,6 +216,77 @@ Authorization: Bearer <token>
   "deleted": true
 }
 ```
+
+### 获取分享给我的文档
+
+```
+GET /api/user/shares/shared-with-me
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>
+```
+
+**响应示例**:
+```json
+{
+  "items": [
+    {
+      "id": "share-id",
+      "documentId": "document-id",
+      "sharerId": "owner-id",
+      "sharerName": "分享者",
+      "permission": "read",
+      "createdAt": "2024-01-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+### 管理员：用户列表
+
+```
+GET /api/user/admin/users
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>   // 需要 admin 角色
+```
+
+**说明**: 仅 `role = admin` 的用户可访问，返回系统用户列表。
+
+### 管理员：修改用户角色
+
+```
+PUT /api/user/admin/users/:id/role
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>   // 需要 admin 角色
+```
+
+**请求体**:
+```json
+{
+  "role": "admin"
+}
+```
+
+### 管理员：查看服务状态
+
+```
+GET /api/user/admin/system-status
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>   // 需要 admin 角色
+```
+
+**说明**: 聚合返回各后端服务的健康状态，供管理后台展示。
 
 ## 文档服务 (Document Service)
 
@@ -488,6 +575,29 @@ Authorization: Bearer <token>
 }
 ```
 
+### 获取版本详情
+
+```
+GET /api/doc/notes/:id/versions/:versionId
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>
+```
+
+**响应示例**:
+```json
+{
+  "id": "version-id",
+  "noteId": "note-id",
+  "title": "笔记标题",
+  "content": "版本内容（文本或 HTML 预览）",
+  "label": "自动快照",
+  "createdAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
 ### 恢复版本
 
 ```
@@ -510,9 +620,42 @@ Authorization: Bearer <token>
 }
 ```
 
+### 上传图片
+
+```
+POST /api/doc/images/upload
+```
+
+**请求头**:
+```
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+```
+
+**请求体**:
+- `file`: 图片文件（JPEG / PNG / GIF / WebP / SVG / BMP / TIFF）
+
+**响应示例**:
+```json
+{
+  "url": "/api/doc/images/<key>",
+  "key": "user-id/images/uuid.png",
+  "fileName": "diagram.png",
+  "bytes": 20480
+}
+```
+
+### 读取图片
+
+```
+GET /api/doc/images/:key
+```
+
+**说明**: 按对象 key 从 MinIO 读取图片并回传二进制内容，无需认证（key 本身包含用户前缀，作为非公开但可猜测度低的访问凭据）。编辑器中的图片 URL 即指向此接口。
+
 ## AI 服务 (AI Service)
 
-> **注意**: AI 服务端点需要通过 `AI_SERVICE_SECRET` 进行服务间认证。请求头：`Authorization: Bearer <AI_SERVICE_SECRET>`。前端通过 document-service 代理调用，无需直接配置此 token。
+> **注意**: AI 服务的所有业务端点（`/pdf/parse`、`/documents/index`、`/summary`、`/polish`、`/chat`）都通过 `verify_service_auth` 校验服务间认证：当配置了 `AI_SERVICE_SECRET` 时，请求头必须为 `Authorization: Bearer <AI_SERVICE_SECRET>`，否则返回 403；未配置时为开放访问（开发模式）。前端不直接调用这些端点，而是通过 document-service 代理转发，无需直接配置此 token。
 
 ### 健康检查
 
@@ -525,7 +668,61 @@ GET /api/ai/health
 {
   "service": "ai-service",
   "status": "ok",
+  "provider": "mock",
+  "model": "mock-model",
+  "mineruBackend": "pipeline",
+  "chromaCollection": "note_chunks",
+  "embeddingModel": "text-embedding-3-small",
   "timestamp": "2024-01-01T00:00:00.000Z"
+}
+```
+
+### 解析 PDF（服务内部）
+
+```
+POST /api/ai/pdf/parse
+```
+
+**请求头**:
+```
+Authorization: Bearer <AI_SERVICE_SECRET>
+Content-Type: multipart/form-data
+```
+
+**请求体**:
+- `file`: PDF 文件
+- `documentId`（可选）、`noteId`（可选）
+
+**说明**: 由 document-service 调用。使用 MinerU 解析 PDF，返回 markdown/html 草稿、提取的图片资源，并将分块索引到 Chroma。
+
+### 索引文档内容（服务内部）
+
+```
+POST /api/ai/documents/index
+```
+
+**请求头**:
+```
+Authorization: Bearer <AI_SERVICE_SECRET>
+Content-Type: application/json
+```
+
+**请求体**:
+```json
+{
+  "text": "要索引的文本内容",
+  "markdown": "可选 markdown",
+  "documentId": "document-id",
+  "noteId": "note-id",
+  "sourceName": "来源名称"
+}
+```
+
+**响应示例**:
+```json
+{
+  "status": "indexed",
+  "chunks": 12
 }
 ```
 
@@ -656,18 +853,23 @@ GET /api/sync/pull?since=<timestamp>
 Authorization: Bearer <token>
 ```
 
+**说明**: 拉取当前用户自己的笔记和分享给自己的笔记。提供 `since`（ISO 时间戳）时仅返回 `updatedAt > since` 的笔记，实现增量同步。返回的 `cursor` 应作为下次拉取的 `since`。
+
 **响应示例**:
 ```json
 {
-  "changes": [
+  "cursor": "2024-01-01T00:00:00.000Z",
+  "notes": [
     {
       "id": "note-id",
       "title": "笔记标题",
       "content": "笔记内容",
+      "ownerId": "user-id",
+      "sourcePdfId": null,
+      "createdAt": "2024-01-01T00:00:00.000Z",
       "updatedAt": "2024-01-01T00:00:00.000Z"
     }
-  ],
-  "timestamp": "2024-01-01T00:00:00.000Z"
+  ]
 }
 ```
 
@@ -682,15 +884,18 @@ POST /api/sync/push
 Authorization: Bearer <token>
 ```
 
-**请求体**:
+**请求体**: `changes` 为离线队列项数组，每项含 `id`（队列项 ID）、`noteId`（服务端笔记 ID，create 时可空）、`type`（`create` / `update` / `delete`）以及可选的 `title`、`content`、`baseUpdatedAt`、`createdAt`。
+
 ```json
 {
   "changes": [
     {
-      "id": "note-id",
+      "id": "queue-item-id",
+      "noteId": "note-id",
       "type": "update",
       "title": "更新后的标题",
-      "content": "更新后的内容"
+      "content": "更新后的内容",
+      "baseUpdatedAt": "2024-01-01T00:00:00.000Z"
     }
   ]
 }
@@ -699,16 +904,30 @@ Authorization: Bearer <token>
 **响应示例**:
 ```json
 {
+  "accepted": true,
   "results": [
     {
-      "id": "note-id",
-      "success": true,
-      "updatedAt": "2024-01-01T00:00:00.000Z"
+      "queueId": "queue-item-id",
+      "noteId": "note-id",
+      "status": "updated",
+      "note": {
+        "id": "note-id",
+        "title": "更新后的标题",
+        "content": "更新后的内容",
+        "updatedAt": "2024-01-01T00:00:01.000Z"
+      }
     }
-  ],
-  "timestamp": "2024-01-01T00:00:00.000Z"
+  ]
 }
 ```
+
+每个结果项的 `status` 取值：
+
+- `created`：create 成功，附带 `remoteId`（服务端新笔记 ID）与 `note`。
+- `updated`：update 成功，附带最新 `note`。
+- `deleted`：delete 成功（或笔记已不存在）。
+- `conflict`：`baseUpdatedAt` 早于服务端当前版本，附带 `serverNote` 供前端选择“保留本地草稿”或“使用服务器版本”。
+- `error`：处理失败，附带 `message`。
 
 ## 错误响应
 
