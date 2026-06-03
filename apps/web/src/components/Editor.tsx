@@ -15,6 +15,23 @@ import { MathematicsDisplayMode } from '../lib/MathematicsDisplayMode';
 import { sanitizeMathHtml } from '../lib/markdownConvert';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
+import {
+  BoldIcon,
+  ItalicIcon,
+  StrikeIcon,
+  CodeIcon,
+  ListIcon,
+  OrderedListIcon,
+  TaskListIcon,
+  QuoteIcon,
+  CodeBlockIcon,
+  HorizontalRuleIcon,
+  UndoIcon,
+  RedoIcon,
+  ImageIcon,
+  MathIcon,
+  TableIcon,
+} from './Icons';
 import type * as Y from 'yjs';
 import type { WebsocketProvider } from 'y-websocket';
 
@@ -212,25 +229,25 @@ export default function Editor({ content, onUpdate, editable = true, readingMode
           className={`fmt-btn${editor.isActive('bold') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleBold().run()}
           title="加粗 (Ctrl+B)"
-        ><strong>B</strong></button>
+        ><BoldIcon /></button>
         <button
           type="button"
           className={`fmt-btn${editor.isActive('italic') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleItalic().run()}
           title="斜体 (Ctrl+I)"
-        ><em>I</em></button>
+        ><ItalicIcon /></button>
         <button
           type="button"
           className={`fmt-btn${editor.isActive('strike') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleStrike().run()}
           title="删除线"
-        ><s>S</s></button>
+        ><StrikeIcon /></button>
         <button
           type="button"
           className={`fmt-btn${editor.isActive('code') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleCode().run()}
           title="行内代码"
-        >{'</>'}</button>
+        ><CodeIcon /></button>
 
         <div className="fmt-divider" />
 
@@ -239,31 +256,31 @@ export default function Editor({ content, onUpdate, editable = true, readingMode
           className={`fmt-btn${editor.isActive('bulletList') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleBulletList().run()}
           title="无序列表"
-        >•</button>
+        ><ListIcon /></button>
         <button
           type="button"
           className={`fmt-btn${editor.isActive('orderedList') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleOrderedList().run()}
           title="有序列表"
-        >1.</button>
+        ><OrderedListIcon /></button>
         <button
           type="button"
           className={`fmt-btn${editor.isActive('taskList') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleTaskList().run()}
           title="任务列表"
-        >☑</button>
+        ><TaskListIcon /></button>
         <button
           type="button"
           className={`fmt-btn${editor.isActive('blockquote') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleBlockquote().run()}
           title="引用"
-        >"</button>
+        ><QuoteIcon /></button>
         <button
           type="button"
           className={`fmt-btn${editor.isActive('codeBlock') ? ' active' : ''}`}
           onClick={() => editor.chain().focus().toggleCodeBlock().run()}
           title="代码块"
-        >{'{ }'}</button>
+        ><CodeBlockIcon /></button>
         {editor.isActive('codeBlock') && (
             <select
               className="code-lang-select"
@@ -306,32 +323,32 @@ export default function Editor({ content, onUpdate, editable = true, readingMode
         <button type="button" className="fmt-btn"
           onClick={() => editor.chain().focus().setHorizontalRule().run()}
           title="分割线"
-        >―</button>
+        ><HorizontalRuleIcon /></button>
         <button type="button" className="fmt-btn"
           onClick={() => editor.chain().focus().undo().run()}
           disabled={!editor.can().undo()}
           title="撤销 (Ctrl+Z)"
-        >↶</button>
+        ><UndoIcon /></button>
         <button type="button" className="fmt-btn"
           onClick={() => editor.chain().focus().redo().run()}
           disabled={!editor.can().redo()}
           title="重做 (Ctrl+Shift+Z)"
-        >↷</button>
+        ><RedoIcon /></button>
 
         <div className="fmt-divider" />
 
         <button type="button" className="fmt-btn"
           onClick={() => imageInputRef.current?.click()}
           title="插入图片"
-        >🖼</button>
+        ><ImageIcon /></button>
         <button type="button" className="fmt-btn"
           onClick={insertMathBlock}
           title="插入数学公式"
-        >∑</button>
+        ><MathIcon /></button>
         <button type="button" className="fmt-btn"
           onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
           title="插入表格"
-        >⊞</button>
+        ><TableIcon /></button>
 
         {floatingToolbar && (
           <div className="toolbar-floating-slot" style={{ marginLeft: 'auto' }}>

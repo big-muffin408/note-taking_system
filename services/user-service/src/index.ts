@@ -767,6 +767,54 @@ app.delete('/shares/:id', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
+// List the current user's favorite (starred) document IDs
+app.get('/favorites', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT document_id FROM favorites WHERE user_id = ?',
+      [req.userId]
+    );
+    res.json({ documentIds: (rows as any[]).map((r) => r.document_id) });
+  } catch (error) {
+    console.error('List favorites error:', error);
+    res.status(500).json({ error: '获取收藏列表失败' });
+  }
+});
+
+// Star a note for the current user. Favorites are personal, so any signed-in
+// user may favorite any document; visibility is still gated by the notes list,
+// so an inaccessible favorite is harmless.
+app.put('/favorites/:documentId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const documentId = req.params.documentId;
+    if (!documentId) {
+      return res.status(400).json({ error: '缺少文档 ID' });
+    }
+    await pool.query(
+      'INSERT IGNORE INTO favorites (user_id, document_id) VALUES (?, ?)',
+      [req.userId, documentId]
+    );
+    res.json({ documentId, starred: true });
+  } catch (error) {
+    console.error('Add favorite error:', error);
+    res.status(500).json({ error: '收藏失败' });
+  }
+});
+
+// Unstar a note for the current user
+app.delete('/favorites/:documentId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    await pool.query(
+      'DELETE FROM favorites WHERE user_id = ? AND document_id = ?',
+      [req.userId, req.params.documentId]
+    );
+    res.json({ documentId: req.params.documentId, starred: false });
+  } catch (error) {
+    console.error('Remove favorite error:', error);
+    res.status(500).json({ error: '取消收藏失败' });
+  }
+});
+
 function requireInternalAuth(req: express.Request, res: express.Response): boolean {
   if (!internalServiceSecret) return true; // no secret configured = open (dev mode)
   const secret = req.headers['x-internal-secret'];
@@ -804,6 +852,59 @@ app.get('/internal/check-access', async (req, res) => {
   } catch (error) {
     console.error('Check access error:', error);
     res.status(500).json({ error: '检查权限失败' });
+  }
+});
+
+// Internal: list a user's favorite document IDs (called by document-service to enrich the notes list)
+app.get('/internal/favorites', async (req, res) => {
+  if (!requireInternalAuth(req, res)) return;
+  try {
+    const userId = typeof req.query.userId === 'string' ? req.query.userId : '';
+    if (!userId) {
+      return res.status(400).json({ error: '缺少 userId' });
+    }
+    const [rows] = await pool.query(
+      'SELECT document_id FROM favorites WHERE user_id = ?',
+      [userId]
+    );
+    res.json({ documentIds: (rows as any[]).map((r) => r.document_id) });
+  } catch (error) {
+    console.error('Internal favorites error:', error);
+    res.status(500).json({ error: '获取收藏列表失败' });
+  }
+});
+
+// Internal: remove all favorites for a document (called by document-service on delete)
+app.delete('/internal/cleanup-favorites', async (req, res) => {
+  if (!requireInternalAuth(req, res)) return;
+  try {
+    const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : '';
+    if (!documentId) {
+      return res.status(400).json({ error: '缺少 documentId' });
+    }
+    const [result] = await pool.query('DELETE FROM favorites WHERE document_id = ?', [documentId]);
+    res.json({ deleted: true, count: (result as any).affectedRows ?? 0 });
+  } catch (error) {
+    console.error('Cleanup favorites error:', error);
+    res.status(500).json({ error: '清理收藏记录失败' });
+  }
+});
+
+// Internal: remove all shares for a document (called by document-service on delete)
+app.delete('/internal/cleanup-shares', async (req, res) => {
+  if (!requireInternalAuth(req, res)) return;
+  try {
+    const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : '';
+    if (!documentId) {
+      return res.status(400).json({ error: '缺少 documentId' });
+    }
+
+    const [result] = await pool.query('DELETE FROM shares WHERE document_id = ?', [documentId]);
+
+    res.json({ deleted: true, count: (result as any).affectedRows ?? 0 });
+  } catch (error) {
+    console.error('Cleanup shares error:', error);
+    res.status(500).json({ error: '清理分享记录失败' });
   }
 });
 

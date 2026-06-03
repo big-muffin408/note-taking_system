@@ -18,9 +18,10 @@ function getSnippet(note: NoteSummary): string {
 }
 
 export default function NoteList({ filter = 'all' }: NoteListProps) {
-  const { notes, loading, deleteNote } = useNotes();
+  const { notes, loading, deleteNote, toggleStar } = useNotes();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [starringId, setStarringId] = React.useState<string | null>(null);
 
   const filteredNotes = React.useMemo(() => {
     if (filter === 'starred') {
@@ -28,10 +29,7 @@ export default function NoteList({ filter = 'all' }: NoteListProps) {
     }
     if (filter === 'shared') {
       if (!user?.id) return [];
-      return notes.filter((n) => {
-        const ownerId = (n as any).ownerId;
-        return ownerId && ownerId !== user.id;
-      });
+      return notes.filter((n) => n.ownerId && n.ownerId !== user.id);
     }
     if (filter === 'recent') {
       return [...notes].sort((a, b) =>
@@ -59,6 +57,20 @@ export default function NoteList({ filter = 'all' }: NoteListProps) {
       setError(err instanceof Error ? err.message : '删除笔记失败');
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function handleToggleStar(note: NoteSummary) {
+    const next = !(note as any).starred;
+    setStarringId(note.id);
+    setError(null);
+    try {
+      await toggleStar(note.id, next);
+    } catch (err) {
+      console.error('Failed to toggle star:', err);
+      setError(err instanceof Error ? err.message : '更新收藏状态失败');
+    } finally {
+      setStarringId(null);
     }
   }
 
@@ -103,6 +115,9 @@ export default function NoteList({ filter = 'all' }: NoteListProps) {
                     day: 'numeric',
                   })}
                 </span>
+                {note.ownerId && note.ownerId !== user?.id && (
+                  <span className="shared-badge">共享</span>
+                )}
                 {note.syncStatus && note.syncStatus !== 'synced' && (
                   <span className={`sync-badge ${note.syncStatus}`}>
                     {note.syncStatus === 'pending' ? '待同步' : note.syncStatus === 'conflict' ? '冲突' : '离线'}
@@ -111,6 +126,19 @@ export default function NoteList({ filter = 'all' }: NoteListProps) {
               </div>
             </div>
           </NavLink>
+          <button
+            type="button"
+            className={`note-item-star${(note as any).starred ? ' starred' : ''}`}
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); handleToggleStar(note); }}
+            disabled={starringId === note.id}
+            aria-label={`${(note as any).starred ? '取消收藏' : '收藏'} ${note.title || '未命名笔记'}`}
+            aria-pressed={!!(note as any).starred}
+            title={(note as any).starred ? '取消收藏' : '收藏'}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill={(note as any).starred ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+              <path d="M8 2l1.9 3.85L14 6.45l-3 2.92.7 4.13L8 11.55 4.3 13.5 5 9.37 2 6.45l4.1-.6L8 2z" />
+            </svg>
+          </button>
           <button
             type="button"
             className="note-item-delete"

@@ -98,10 +98,12 @@ function registerBackgroundSync(): void {
 
 export interface NoteSummary {
   id: string;
+  ownerId?: string;
   title: string;
   updatedAt: string;
   createdAt: string;
   sourcePdfId?: string;
+  starred?: boolean;
   syncStatus?: OfflineSyncStatus;
   error?: string;
 }
@@ -114,6 +116,7 @@ interface NotesContextValue {
   fetchNotes: () => Promise<void>;
   createNote: (title?: string) => Promise<NoteSummary>;
   deleteNote: (id: string) => Promise<void>;
+  toggleStar: (id: string, starred: boolean) => Promise<void>;
   syncNow: () => Promise<void>;
   upsertLocalNote: (note: OfflineNote) => Promise<void>;
   resolveConflict: (noteId: string, resolution: 'local' | 'server') => Promise<void>;
@@ -139,10 +142,12 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     const cached = await getCachedNotes(user.id);
     setNotes(cached.map((note) => ({
       id: note.id,
+      ownerId: note.ownerId,
       title: note.title,
       createdAt: note.createdAt,
       updatedAt: note.localUpdatedAt,
       sourcePdfId: note.sourcePdfId,
+      starred: note.starred,
       syncStatus: note.syncStatus,
       error: note.error,
     })));
@@ -415,6 +420,36 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
     [loadCachedNotes, token, user]
   );
 
+  const toggleStar = useCallback(
+    async (id: string, starred: boolean) => {
+      if (!user) throw new Error('未登录');
+      const cached = (await getCachedNotes(user.id)).find((note) => note.id === id);
+      if (!cached) return;
+
+      // Optimistic local update
+      await upsertCachedNote({ ...cached, starred });
+      await loadCachedNotes();
+
+      // Local-only notes aren't on the server yet — keep the flag locally until they sync
+      if (id.startsWith('local-')) return;
+
+      try {
+        // Favorites are stored per-user in user-service
+        if (starred) {
+          await api.put(`/api/user/favorites/${id}`, {}, token);
+        } else {
+          await api.del(`/api/user/favorites/${id}`, token);
+        }
+      } catch (err) {
+        // Revert on failure
+        await upsertCachedNote({ ...cached, starred: !starred });
+        await loadCachedNotes();
+        throw err;
+      }
+    },
+    [loadCachedNotes, token, user]
+  );
+
   const upsertLocalNote = useCallback(async (note: OfflineNote) => {
     await upsertCachedNote(note);
     await loadCachedNotes();
@@ -465,7 +500,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
   }, [loadCachedNotes, syncNow, user]);
 
   return (
-    <NotesContext.Provider value={{ notes, loading, online, syncing, fetchNotes, createNote, deleteNote, syncNow, upsertLocalNote, resolveConflict }}>
+    <NotesContext.Provider value={{ notes, loading, online, syncing, fetchNotes, createNote, deleteNote, toggleStar, syncNow, upsertLocalNote, resolveConflict }}>
       {children}
     </NotesContext.Provider>
   );

@@ -79,6 +79,7 @@ services:
       AI_SERVICE_SECRET: ${AI_SERVICE_SECRET:-}
       MONGO_URL: mongodb://${MONGO_INITDB_ROOT_USERNAME:-notes_admin}:${MONGO_INITDB_ROOT_PASSWORD:-notes_password}@mongodb:27017
       AI_SERVICE_URL: http://ai-service:3003
+      USER_SERVICE_URL: http://user-service:3001
       MINIO_ENDPOINT: minio
       MINIO_PORT: 9000
       MINIO_BUCKET: ${MINIO_BUCKET:-notes-assets}

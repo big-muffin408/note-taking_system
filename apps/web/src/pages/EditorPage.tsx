@@ -19,6 +19,16 @@ import VersionHistory from '../components/VersionHistory';
 import ShareDialog from '../components/ShareDialog';
 import { htmlToMarkdown, downloadFile } from '../lib/markdownConvert';
 import { getWsBaseUrl } from '../lib/electronConfig';
+import {
+  ClockIcon,
+  UploadIcon,
+  ShareIcon,
+  ReadIcon,
+  EditIcon,
+  ExportIcon,
+  SaveIcon,
+  SparklesIcon,
+} from '../components/Icons';
 
 interface NoteDetail {
   id: string;
@@ -957,7 +967,7 @@ export default function EditorPage() {
         {id && !id.startsWith('local-') && (
           <>
             <button className="btn-ghost" onClick={() => setShowVersionHistory(true)} title="查看版本历史">
-              历史
+              <ClockIcon /> 历史
             </button>
             <button
               className="btn-ghost"
@@ -965,7 +975,7 @@ export default function EditorPage() {
               disabled={uploadingPdf}
               title="上传 PDF 解析为笔记"
             >
-              {uploadingPdf ? '解析中…' : 'PDF'}
+              <UploadIcon /> {uploadingPdf ? '解析中…' : 'PDF'}
             </button>
             <input
               ref={pdfInputRef}
@@ -975,7 +985,7 @@ export default function EditorPage() {
               onChange={handlePdfUpload}
             />
             <button className="btn-ghost" onClick={() => setShowShareDialog(true)} title="分享笔记">
-              分享
+              <ShareIcon /> 分享
             </button>
           </>
         )}
@@ -984,11 +994,13 @@ export default function EditorPage() {
           onClick={() => setReadingMode((prev) => !prev)}
           title={readingMode ? '切换到编辑模式' : '切换到阅读模式'}
         >
-          {readingMode ? '编辑' : '阅读'}
+          {readingMode ? <><EditIcon /> 编辑</> : <><ReadIcon /> 阅读</>}
         </button>
-        <button className="btn-ghost" onClick={handleExportMarkdown} title="导出为 Markdown">导出</button>
+        <button className="btn-ghost" onClick={handleExportMarkdown} title="导出为 Markdown">
+          <ExportIcon /> 导出
+        </button>
         <button className="btn-ghost" onClick={saveToServer} disabled={saving}>
-          {saving ? '保存中…' : '保存'}
+          <SaveIcon /> {saving ? '保存中…' : '保存'}
         </button>
         <button
           className={`btn-ghost${ai.open ? ' active' : ''}`}
@@ -996,7 +1008,7 @@ export default function EditorPage() {
           title="AI 工具面板"
           style={ai.open ? { background: 'var(--ink)', color: 'var(--paper)' } : undefined}
         >
-          ✦ AI
+          <SparklesIcon /> AI
         </button>
       </header>
 

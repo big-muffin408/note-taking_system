@@ -94,6 +94,17 @@ export async function ensureUserSchema() {
     )
   `);
 
+  // Favorites table — per-user "starred" notes (a personal user↔document relationship)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS favorites (
+      user_id VARCHAR(36) NOT NULL,
+      document_id VARCHAR(64) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, document_id),
+      INDEX idx_favorites_user (user_id)
+    )
+  `);
+
   // Audit logs table
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (

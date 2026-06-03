@@ -113,6 +113,20 @@ async function checkShareAccess(userId: string, documentId: string): Promise<'no
   }
 }
 
+// Fetch the set of document IDs the user has favorited (stored per-user in user-service).
+async function getUserFavorites(userId: string): Promise<Set<string>> {
+  try {
+    const headers: Record<string, string> = {};
+    if (internalServiceSecret) headers['X-Internal-Secret'] = internalServiceSecret;
+    const res = await fetch(`${userServiceUrl}/internal/favorites?userId=${encodeURIComponent(userId)}`, { headers });
+    if (!res.ok) return new Set();
+    const data = await res.json() as { documentIds: string[] };
+    return new Set(data.documentIds ?? []);
+  } catch {
+    return new Set();
+  }
+}
+
 function stripPdfExtension(fileName: string) {
   return fileName.replace(/\.pdf$/i, '').trim() || 'PDF 笔记';
 }
@@ -521,6 +535,8 @@ app.get('/notes', authMiddleware, async (req: AuthRequest, res) => {
     const allNotes = [...ownNotes, ...sharedNotes];
     allNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
+    const favorites = await getUserFavorites(req.userId!);
+
     res.json({
       items: allNotes.map((n) => ({
         id: n._id.toHexString(),
@@ -528,6 +544,7 @@ app.get('/notes', authMiddleware, async (req: AuthRequest, res) => {
         ownerId: n.ownerId,
         content: n.content,
         sourcePdfId: n.sourcePdfId,
+        starred: favorites.has(n._id.toHexString()),
         createdAt: n.createdAt,
         updatedAt: n.updatedAt
       }))
@@ -562,14 +579,16 @@ app.get('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
       }
     }
 
+    const favorites = await getUserFavorites(req.userId!);
+
     res.json({
       id: note._id.toHexString(),
       title: note.title,
       content: note.content,
       ownerId: note.ownerId,
       sourcePdfId: note.sourcePdfId,
+      starred: favorites.has(note._id.toHexString()),
       createdAt: note.createdAt,
-      
       updatedAt: note.updatedAt
     });
   } catch (error) {
@@ -711,9 +730,20 @@ app.delete('/notes/:id', authMiddleware, async (req: AuthRequest, res) => {
 
     await auditLog(req.userId!, 'delete_note', req.params.id);
 
-    // Also clean up shares for this document
+    // Also clean up shares and favorites for this document
     try {
-      await fetch(`${userServiceUrl}/internal/cleanup-shares?documentId=${req.params.id}`, { method: 'DELETE' }).catch(() => {});
+      const cleanupHeaders: Record<string, string> = {};
+      if (internalServiceSecret) cleanupHeaders['X-Internal-Secret'] = internalServiceSecret;
+      await Promise.all([
+        fetch(`${userServiceUrl}/internal/cleanup-shares?documentId=${req.params.id}`, {
+          method: 'DELETE',
+          headers: cleanupHeaders,
+        }).catch(() => {}),
+        fetch(`${userServiceUrl}/internal/cleanup-favorites?documentId=${req.params.id}`, {
+          method: 'DELETE',
+          headers: cleanupHeaders,
+        }).catch(() => {}),
+      ]);
     } catch { /* ignore */ }
 
     res.json({ deleted: true, id: req.params.id });

@@ -3,6 +3,7 @@ export type OfflineSyncStatus = 'synced' | 'pending' | 'conflict' | 'deleted';
 export interface OfflineNote {
   id: string;
   userId: string;
+  ownerId?: string;
   title: string;
   content: string;
   createdAt: string;
@@ -11,6 +12,7 @@ export interface OfflineNote {
   baseUpdatedAt?: string;
   localUpdatedAt: string;
   sourcePdfId?: string;
+  starred?: boolean;
   syncStatus: OfflineSyncStatus;
   error?: string;
 }
@@ -132,11 +134,13 @@ export async function removeServerConflictCopy(userId: string, noteId: string): 
 
 export async function cacheServerNotes(userId: string, notes: Array<{
   id: string;
+  ownerId?: string;
   title: string;
   content?: string;
   createdAt: string;
   updatedAt: string;
   sourcePdfId?: string;
+  starred?: boolean;
 }>): Promise<void> {
   const db = await openDb();
   const tx = db.transaction(NOTE_STORE, 'readwrite');
@@ -156,6 +160,7 @@ export async function cacheServerNotes(userId: string, notes: Array<{
       key: noteKey(userId, note.id),
       id: note.id,
       userId,
+      ownerId: note.ownerId ?? existing?.ownerId,
       title: note.title,
       content,
       createdAt: note.createdAt,
@@ -164,6 +169,8 @@ export async function cacheServerNotes(userId: string, notes: Array<{
       baseUpdatedAt: note.updatedAt,
       localUpdatedAt: note.updatedAt,
       sourcePdfId: note.sourcePdfId,
+      // Preserve a locally-set star when the server payload omits the flag (e.g. sync pull)
+      starred: note.starred ?? existing?.starred ?? false,
       syncStatus: 'synced',
     } satisfies OfflineNote & { key: string });
   }

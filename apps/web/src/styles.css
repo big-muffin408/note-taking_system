@@ -979,6 +979,23 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .note-sync-badge-conflict { background: oklch(0.94 0.06 25); color: oklch(0.45 0.14 25); }
 .sync-badge.offline { background: var(--paper-3); color: var(--ink-3); }
 
+.shared-badge {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  background: oklch(0.93 0.05 250);
+  color: oklch(0.45 0.12 250);
+}
+
+[data-theme="dark"] .shared-badge {
+  background: oklch(0.30 0.06 250);
+  color: oklch(0.82 0.10 250);
+}
+
 [data-theme="dark"] .sync-badge.pending,
 [data-theme="dark"] .note-sync-badge-pending { background: oklch(0.30 0.06 75); color: oklch(0.82 0.10 75); }
 [data-theme="dark"] .sync-badge.conflict,
@@ -1010,6 +1027,29 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
   color: var(--danger);
 }
 .note-item-delete:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.note-item-star {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-4);
+  cursor: pointer;
+  display: inline-flex;
+  flex-shrink: 0;
+  height: 24px;
+  justify-content: center;
+  line-height: 1;
+  opacity: 0;
+  transition: background var(--transition), color var(--transition), opacity var(--transition);
+  width: 24px;
+}
+.note-item-row:hover .note-item-star,
+.note-item-row:focus-within .note-item-star { opacity: 1; }
+.note-item-star:hover:not(:disabled) { background: var(--paper-3); color: var(--ink-2); }
+/* Keep the star visible and highlighted once a note is favorited */
+.note-item-star.starred { opacity: 1; color: oklch(0.78 0.14 85); }
+.note-item-star:disabled { cursor: not-allowed; opacity: 0.6; }
 
 /* error / confirm */
 .note-list-error,
