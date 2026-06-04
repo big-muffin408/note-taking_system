@@ -20,6 +20,20 @@ export default function Sidebar({ open, onClose, onResizeStart }: SidebarProps) 
   const [creating, setCreating] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [filter, setFilter] = React.useState<'all' | 'starred' | 'shared' | 'recent'>('all');
+  const [query, setQuery] = React.useState('');
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const currentUserId = user?.id;
   const starredCount = notes.filter((n) => (n as any).starred).length;
@@ -111,8 +125,24 @@ export default function Sidebar({ open, onClose, onResizeStart }: SidebarProps) 
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
             <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>
           </svg>
-          <input placeholder="搜索笔记 · 内容 · 标签" readOnly />
-          <span className="search-kbd">⌘K</span>
+          <input
+            ref={searchInputRef}
+            placeholder="搜索笔记 · 内容"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') setQuery(''); }}
+            aria-label="搜索笔记"
+          />
+          {query ? (
+            <button
+              type="button"
+              className="search-clear"
+              onClick={() => { setQuery(''); searchInputRef.current?.focus(); }}
+              aria-label="清除搜索"
+            >×</button>
+          ) : (
+            <span className="search-kbd">⌘K</span>
+          )}
         </div>
       </div>
 
@@ -153,14 +183,15 @@ export default function Sidebar({ open, onClose, onResizeStart }: SidebarProps) 
 
       {/* Notes section */}
       <div className="section-label">
-        {filter === 'starred' ? '收藏笔记'
+        {query.trim() ? '搜索结果'
+          : filter === 'starred' ? '收藏笔记'
           : filter === 'shared' ? '共享给我'
           : filter === 'recent' ? '最近编辑'
           : '最近笔记'}
       </div>
 
       <div className="sidebar-notes">
-        <NoteList filter={filter} />
+        <NoteList filter={filter} query={query} />
       </div>
 
       {/* Footer */}

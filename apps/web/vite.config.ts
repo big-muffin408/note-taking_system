@@ -53,6 +53,10 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    // Accessed over the LAN through the nginx gateway (e.g. from a Mac via the
+    // Windows host IP), so the Host header is not localhost. Disable Vite's
+    // host check for this dev-server-behind-proxy setup.
+    allowedHosts: true,
     proxy,
   },
 });

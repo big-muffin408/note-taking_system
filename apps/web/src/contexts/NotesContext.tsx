@@ -100,6 +100,7 @@ export interface NoteSummary {
   id: string;
   ownerId?: string;
   title: string;
+  content?: string;
   updatedAt: string;
   createdAt: string;
   sourcePdfId?: string;
@@ -144,6 +145,7 @@ export function NotesProvider({ children }: { children: React.ReactNode }) {
       id: note.id,
       ownerId: note.ownerId,
       title: note.title,
+      content: note.content,
       createdAt: note.createdAt,
       updatedAt: note.localUpdatedAt,
       sourcePdfId: note.sourcePdfId,

@@ -8,36 +8,49 @@ export type NoteFilter = 'all' | 'starred' | 'shared' | 'recent';
 
 interface NoteListProps {
   filter?: NoteFilter;
+  query?: string;
+}
+
+function getPlainText(note: NoteSummary): string {
+  const raw = (note as any).content ?? (note as any).snippet ?? '';
+  if (!raw) return '';
+  return raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function getSnippet(note: NoteSummary): string {
-  const raw = (note as any).content ?? (note as any).snippet ?? '';
-  if (!raw) return '';
-  const text = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  return text.slice(0, 80);
+  return getPlainText(note).slice(0, 80);
 }
 
-export default function NoteList({ filter = 'all' }: NoteListProps) {
+export default function NoteList({ filter = 'all', query = '' }: NoteListProps) {
   const { notes, loading, deleteNote, toggleStar } = useNotes();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [starringId, setStarringId] = React.useState<string | null>(null);
 
+  const trimmedQuery = query.trim().toLowerCase();
+
   const filteredNotes = React.useMemo(() => {
+    let result: NoteSummary[];
     if (filter === 'starred') {
-      return notes.filter((n) => (n as any).starred);
-    }
-    if (filter === 'shared') {
-      if (!user?.id) return [];
-      return notes.filter((n) => n.ownerId && n.ownerId !== user.id);
-    }
-    if (filter === 'recent') {
-      return [...notes].sort((a, b) =>
+      result = notes.filter((n) => (n as any).starred);
+    } else if (filter === 'shared') {
+      result = user?.id ? notes.filter((n) => n.ownerId && n.ownerId !== user.id) : [];
+    } else if (filter === 'recent') {
+      result = [...notes].sort((a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
       );
+    } else {
+      result = notes;
     }
-    return notes;
-  }, [notes, filter, user?.id]);
+
+    if (trimmedQuery) {
+      result = result.filter((n) =>
+        (n.title || '').toLowerCase().includes(trimmedQuery) ||
+        getPlainText(n).toLowerCase().includes(trimmedQuery)
+      );
+    }
+    return result;
+  }, [notes, filter, user?.id, trimmedQuery]);
   const { id: activeNoteId } = useParams<{ id: string }>();
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [confirmNote, setConfirmNote] = React.useState<NoteSummary | null>(null);
@@ -83,7 +96,8 @@ export default function NoteList({ filter = 'all' }: NoteListProps) {
   }
 
   if (filteredNotes.length === 0) {
-    const emptyText = filter === 'starred' ? '还没有收藏的笔记'
+    const emptyText = trimmedQuery ? `没有匹配「${query.trim()}」的笔记`
+      : filter === 'starred' ? '还没有收藏的笔记'
       : filter === 'shared' ? '没有共享给你的笔记'
       : '暂无笔记';
     return <div className="note-list-empty">{emptyText}</div>;
