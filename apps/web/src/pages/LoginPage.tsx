@@ -51,8 +51,8 @@ export default function LoginPage() {
           <div className="brand-name">Quire <em>· 集册</em></div>
         </div>
         <div className="quote">
-          写作是思考的副产物。<br />
-          笔记是知识的<em>复利</em>。
+          写作是思考的副产物<br />
+          笔记是知识的<em>复利</em>
         </div>
         <div className="attrib">协作 · AI 增强 · 离线优先</div>
       </div>

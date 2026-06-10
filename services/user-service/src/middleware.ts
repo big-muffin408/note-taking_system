@@ -1,45 +1,11 @@
-import type { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import { createAuthMiddleware, requireJwtSecret, signToken as sharedSignToken } from '@notes/shared';
 
-const JWT_SECRET = process.env.JWT_SECRET ?? '';
-if (!JWT_SECRET) {
-  console.error('FATAL: JWT_SECRET environment variable is not set');
-  process.exit(1);
-}
+export { adminMiddleware, type AuthRequest } from '@notes/shared';
 
-export interface AuthRequest extends Request {
-  userId?: string;
-  userEmail?: string;
-}
+const JWT_SECRET = requireJwtSecret();
 
-export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未提供认证令牌' });
-  }
-
-  const token = authHeader.slice(7);
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; email: string };
-    req.userId = decoded.id;
-    req.userEmail = decoded.email;
-    next();
-  } catch {
-    return res.status(401).json({ error: '无效或已过期的认证令牌' });
-  }
-}
+export const authMiddleware = createAuthMiddleware({ secret: JWT_SECRET });
 
 export function signToken(payload: { id: string; email: string }): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
-}
-
-export function adminMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
-  // Must be called after authMiddleware
-  if (!req.userId) {
-    return res.status(401).json({ error: '未认证' });
-  }
-  // Role check is done in the route handler since we need to query the DB
-  next();
+  return sharedSignToken(payload, JWT_SECRET);
 }

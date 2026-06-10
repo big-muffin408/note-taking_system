@@ -1,160 +1,125 @@
-import express from 'express';
-import { request } from './request-helper.js';
+import { ObjectId } from 'mongodb';
+import { request } from '@notes/shared/testing';
+import { signToken } from '@notes/shared';
 
-// 创建一个简化的测试应用
-const app = express();
-app.use(express.json());
+// 只替换 MongoClient，ObjectId 等保持真实实现
+const mockCollection = {
+  find: jest.fn(),
+};
 
-// 模拟健康检查接口
-app.get('/health', (_req, res) => {
-  res.json({
-    service: 'sync-service',
-    status: 'ok',
-    timestamp: new Date().toISOString()
+jest.mock('mongodb', () => {
+  const actual = jest.requireActual('mongodb');
+  return {
+    ...actual,
+    MongoClient: jest.fn().mockImplementation(() => ({
+      connect: jest.fn().mockResolvedValue(undefined),
+      db: () => ({ collection: () => mockCollection }),
+      close: jest.fn(),
+    })),
+  };
+});
+
+import { app } from '../app.js';
+
+const SECRET = process.env.JWT_SECRET!;
+const auth = `Bearer ${signToken({ id: 'owner-1', email: 'o@t.com' }, SECRET)}`;
+const OWN_NOTE_ID = '507f1f77bcf86cd799439011';
+const SHARED_NOTE_ID = '507f1f77bcf86cd799439012';
+
+const mockFetch = jest.fn();
+global.fetch = mockFetch as unknown as typeof fetch;
+
+function findResult(notes: unknown[]) {
+  return {
+    sort: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue(notes) }),
+  };
+}
+
+function note(id: string, title: string, updatedAt: string, ownerId = 'owner-1') {
+  return {
+    _id: new ObjectId(id),
+    title,
+    content: '<p></p>',
+    ownerId,
+    createdAt: new Date('2026-05-01T00:00:00.000Z'),
+    updatedAt: new Date(updatedAt),
+  };
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  // 默认：user-service 不可达，/pull 应退化为仅自有笔记
+  mockFetch.mockResolvedValue({ ok: false });
+  mockCollection.find.mockReturnValue(findResult([]));
+});
+
+describe('GET /health', () => {
+  it('returns the real service identity', async () => {
+    const response = await request(app).get('/health').expect(200);
+    expect(response.body).toMatchObject({ service: 'sync-service', status: 'ok' });
+    expect(response.body).toHaveProperty('timestamp');
   });
 });
 
-// 模拟拉取接口
-app.get('/pull', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未授权' });
-  }
+describe('GET /pull', () => {
+  it('rejects unauthenticated requests', async () => {
+    await request(app).get('/pull').expect(401);
+  });
 
-  const since = req.query.since as string;
-  const changes = [
-    {
-      id: 'note-1',
-      title: '测试笔记 1',
-      content: '这是测试笔记内容',
-      updatedAt: new Date().toISOString()
-    },
-    {
-      id: 'note-2',
-      title: '测试笔记 2',
-      content: '这是另一个测试笔记',
-      updatedAt: new Date(Date.now() - 3600000).toISOString()
-    }
-  ];
+  it('returns own notes and a cursor', async () => {
+    mockCollection.find.mockReturnValueOnce(
+      findResult([note(OWN_NOTE_ID, '测试笔记', '2026-05-02T00:00:00.000Z')])
+    );
+    const response = await request(app).get('/pull').set('Authorization', auth).expect(200);
 
-  // 如果有since参数，过滤出更新的笔记
-  const filteredChanges = since
-    ? changes.filter(c => new Date(c.updatedAt) > new Date(since))
-    : changes;
+    expect(typeof response.body.cursor).toBe('string');
+    expect(response.body.notes).toHaveLength(1);
+    expect(response.body.notes[0]).toMatchObject({ id: OWN_NOTE_ID, title: '测试笔记', ownerId: 'owner-1' });
+  });
 
-  res.json({
-    changes: filteredChanges,
-    timestamp: new Date().toISOString()
+  it('filters own notes by the since parameter', async () => {
+    const since = '2026-05-01T12:00:00.000Z';
+    await request(app)
+      .get(`/pull?since=${encodeURIComponent(since)}`)
+      .set('Authorization', auth)
+      .expect(200);
+
+    expect(mockCollection.find).toHaveBeenCalledWith({
+      ownerId: 'owner-1',
+      updatedAt: { $gt: new Date(since) },
+    });
+  });
+
+  it('merges shared notes sorted by recency', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [{ documentId: SHARED_NOTE_ID }] }),
+    });
+    mockCollection.find
+      .mockReturnValueOnce(findResult([note(OWN_NOTE_ID, '自己的笔记', '2026-05-01T00:00:00.000Z')]))
+      .mockReturnValueOnce(findResult([note(SHARED_NOTE_ID, '共享的笔记', '2026-05-03T00:00:00.000Z', 'other-1')]));
+
+    const response = await request(app).get('/pull').set('Authorization', auth).expect(200);
+
+    expect(mockCollection.find).toHaveBeenNthCalledWith(2, {
+      _id: { $in: [new ObjectId(SHARED_NOTE_ID)] },
+    });
+    expect(response.body.notes.map((n: { id: string }) => n.id)).toEqual([SHARED_NOTE_ID, OWN_NOTE_ID]);
   });
 });
 
-// 模拟推送接口
-app.post('/push', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未授权' });
-  }
-
-  const { changes } = req.body;
-  if (!Array.isArray(changes)) {
-    return res.status(400).json({ error: '无效的变更数据' });
-  }
-
-  // 模拟处理变更
-  const results = changes.map(change => ({
-    id: change.id,
-    success: true,
-    updatedAt: new Date().toISOString()
-  }));
-
-  res.json({
-    results,
-    timestamp: new Date().toISOString()
-  });
-});
-
-describe('Sync Service API', () => {
-  describe('GET /health', () => {
-    it('should return health status', async () => {
-      const response = await request(app)
-        .get('/health')
-        .expect(200);
-
-      expect(response.body).toHaveProperty('service', 'sync-service');
-      expect(response.body).toHaveProperty('status', 'ok');
-      expect(response.body).toHaveProperty('timestamp');
-    });
+describe('POST /push', () => {
+  it('rejects unauthenticated requests', async () => {
+    await request(app).post('/push').send({ changes: [] }).expect(401);
   });
 
-  describe('GET /pull', () => {
-    it('should return 401 without authorization', async () => {
-      await request(app)
-        .get('/pull')
-        .expect(401);
-    });
+  it('accepts a non-array changes payload as an empty batch', async () => {
+    const response = await request(app)
+      .post('/push')
+      .set('Authorization', auth)
+      .send({ changes: 'invalid' })
+      .expect(200);
 
-    it('should return changes with authorization', async () => {
-      const response = await request(app)
-        .get('/pull')
-        .set('Authorization', 'Bearer test-token')
-        .expect(200);
-
-      expect(response.body).toHaveProperty('changes');
-      expect(response.body).toHaveProperty('timestamp');
-      expect(Array.isArray(response.body.changes)).toBe(true);
-    });
-
-    it('should filter changes by since parameter', async () => {
-      const since = new Date(Date.now() - 1800000).toISOString(); // 30 minutes ago
-      const response = await request(app)
-        .get(`/pull?since=${encodeURIComponent(since)}`)
-        .set('Authorization', 'Bearer test-token')
-        .expect(200);
-
-      expect(response.body).toHaveProperty('changes');
-      // 应该只返回最近30分钟内更新的笔记
-      expect(response.body.changes.length).toBeLessThanOrEqual(2);
-    });
-  });
-
-  describe('POST /push', () => {
-    it('should return 401 without authorization', async () => {
-      await request(app)
-        .post('/push')
-        .send({ changes: [] })
-        .expect(401);
-    });
-
-    it('should return 400 for invalid changes data', async () => {
-      const response = await request(app)
-        .post('/push')
-        .set('Authorization', 'Bearer test-token')
-        .send({ changes: 'invalid' })
-        .expect(400);
-
-      expect(response.body).toHaveProperty('error', '无效的变更数据');
-    });
-
-    it('should process valid changes', async () => {
-      const changes = [
-        {
-          id: 'note-1',
-          type: 'update',
-          title: '更新的标题',
-          content: '更新的内容'
-        }
-      ];
-
-      const response = await request(app)
-        .post('/push')
-        .set('Authorization', 'Bearer test-token')
-        .send({ changes })
-        .expect(200);
-
-      expect(response.body).toHaveProperty('results');
-      expect(response.body).toHaveProperty('timestamp');
-      expect(Array.isArray(response.body.results)).toBe(true);
-      expect(response.body.results[0]).toHaveProperty('success', true);
-    });
+    expect(response.body).toEqual({ accepted: true, results: [] });
   });
 });

@@ -4,6 +4,7 @@ import NoteList from '../NoteList';
 import { vi } from 'vitest';
 
 const mockDeleteNote = vi.fn();
+const mockToggleStar = vi.fn();
 const mockNavigate = vi.fn();
 
 vi.mock('react-router-dom', async () => {
@@ -24,6 +25,13 @@ vi.mock('../../contexts/NotesContext', () => ({
     ],
     loading: false,
     deleteNote: mockDeleteNote,
+    toggleStar: mockToggleStar,
+  }),
+}));
+
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: { id: 'user-1', email: 'test@example.com', username: 'tester' },
   }),
 }));
 

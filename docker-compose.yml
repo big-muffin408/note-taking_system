@@ -32,10 +32,11 @@ services:
 
   user-service:
     build:
-      context: ./services/user-service
+      context: .
+      dockerfile: services/user-service/Dockerfile
     environment:
       PORT: 3001
-      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set (copy .env.example to .env, or generate one with 'openssl rand -base64 32')}"
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-}
       DOCUMENT_SERVICE_URL: http://document-service:3002
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
@@ -71,10 +72,11 @@ services:
 
   document-service:
     build:
-      context: ./services/document-service
+      context: .
+      dockerfile: services/document-service/Dockerfile
     environment:
       PORT: 3002
-      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set (copy .env.example to .env, or generate one with 'openssl rand -base64 32')}"
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-}
       AI_SERVICE_SECRET: ${AI_SERVICE_SECRET:-}
       MONGO_URL: mongodb://${MONGO_INITDB_ROOT_USERNAME:-notes_admin}:${MONGO_INITDB_ROOT_PASSWORD:-notes_password}@mongodb:27017
@@ -124,10 +126,11 @@ services:
 
   collab-service:
     build:
-      context: ./services/collab-service
+      context: .
+      dockerfile: services/collab-service/Dockerfile
     environment:
       PORT: 3004
-      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set (copy .env.example to .env, or generate one with 'openssl rand -base64 32')}"
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-}
       USER_SERVICE_URL: http://user-service:3001
       MONGO_URL: mongodb://${MONGO_INITDB_ROOT_USERNAME:-notes_admin}:${MONGO_INITDB_ROOT_PASSWORD:-notes_password}@mongodb:27017
@@ -142,10 +145,11 @@ services:
 
   sync-service:
     build:
-      context: ./services/sync-service
+      context: .
+      dockerfile: services/sync-service/Dockerfile
     environment:
       PORT: 3005
-      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set (copy .env.example to .env, or generate one with 'openssl rand -base64 32')}"
       USER_SERVICE_URL: http://user-service:3001
       MYSQL_HOST: mysql
       MONGO_URL: mongodb://${MONGO_INITDB_ROOT_USERNAME:-notes_admin}:${MONGO_INITDB_ROOT_PASSWORD:-notes_password}@mongodb:27017

@@ -396,10 +396,17 @@ async def index_chunks(
             "documentId": document_id or "",
             "noteId": note_id or "",
             "sourceName": source_name,
-            "markdown": markdown[:2000],
             "indexedAt": now_iso(),
         },
     )
+    # Keep bookkeeping metadata out of the chunking budget: SentenceSplitter
+    # subtracts metadata length from chunk_size and raises if it doesn't fit.
+    # These fields are filters/labels only, never embedded or fed to the LLM.
+    for key in ("documentId", "noteId", "sourceName", "indexedAt"):
+        if key not in doc.excluded_embed_metadata_keys:
+            doc.excluded_embed_metadata_keys.append(key)
+        if key not in doc.excluded_llm_metadata_keys:
+            doc.excluded_llm_metadata_keys.append(key)
 
     index = VectorStoreIndex.from_documents(
         [doc],

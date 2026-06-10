@@ -199,7 +199,7 @@ test.describe('笔记编辑流程', () => {
     });
 
     await page.goto('/note/local-conflict');
-    await expect(page.getByText('有冲突')).toBeVisible();
+    await expect(page.locator('.sync-conflict-panel')).toBeVisible();
     await expect(page.getByText('服务器版本已更新，请选择保留本地草稿或使用服务器版本。')).toBeVisible();
     await expect(page.getByRole('button', { name: '保留本地草稿' })).toBeVisible();
     await expect(page.getByRole('button', { name: '使用服务器版本' })).toBeVisible();
@@ -287,7 +287,7 @@ test.describe('PDF上传流程', () => {
               pages: 1,
               chunks: 2,
               assetCount: 1,
-              warnings: [],
+              warnings: ['公式块可能不完整'],
             },
       });
     });
@@ -298,7 +298,7 @@ test.describe('PDF上传流程', () => {
 
     await page.goto('/note/note-1');
 
-    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('button', { name: 'PDF' })).toBeVisible();
 
     await page.locator('input[type="file"][accept*=".pdf"]').setInputFiles(
       path.join(process.cwd(), 'fixtures/mineru-sample.pdf')
@@ -418,7 +418,7 @@ test.describe('PDF上传流程', () => {
               pages: 1,
               chunks: 2,
               assetCount: 1,
-              warnings: [],
+              warnings: ['公式块可能不完整'],
             },
       });
     });
@@ -428,7 +428,7 @@ test.describe('PDF上传流程', () => {
     });
 
     await page.goto('/note/note-1');
-    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('button', { name: 'PDF' })).toBeVisible();
 
     await page.locator('input[type="file"][accept*=".pdf"]').setInputFiles(
       path.join(process.cwd(), 'fixtures/mineru-sample.pdf')
@@ -437,7 +437,7 @@ test.describe('PDF上传流程', () => {
     await expect(page.getByText('解析失败')).toBeVisible();
     await expect(page.locator('.pdf-job-actions').getByText('MinerU 解析超时')).toBeVisible();
 
-    await page.getByRole('button', { name: '重试解析' }).click();
+    await page.getByRole('button', { name: '重试', exact: true }).click();
     await expect(page).toHaveURL(/\/note\/note-retry$/);
     await expect(page.getByText(/mineru-api · 1 页/)).toBeVisible();
   });
@@ -563,15 +563,14 @@ test.describe('版本历史流程', () => {
     });
 
     await page.goto('/note/note-1');
-    await page.waitForLoadState('networkidle');
 
-    await page.getByRole('button', { name: '版本历史' }).click();
+    await page.getByRole('button', { name: '历史' }).click();
     await page.getByRole('button', { name: /恢复后的标题/ }).click();
     await expect(page.getByText('恢复后的正文')).toBeVisible();
     await page.getByRole('button', { name: '恢复此版本' }).click();
 
-    await expect(page.locator('.title-input')).toHaveValue('恢复后的标题');
+    await expect(page.locator('.editor-title')).toHaveValue('恢复后的标题');
     await expect(page.getByText('恢复后的正文')).toBeVisible();
-    await expect(page.getByRole('button', { name: '版本历史' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '历史' })).toBeVisible();
   });
 });

@@ -57,7 +57,7 @@ function WelcomePage() {
     <div className="welcome-page">
       <div className="welcome-content">
         <BrandMark size={48} />
-        <h2>欢迎使用 Quire·集册</h2>
+        <h2>欢迎使用 Quire · 集册</h2>
         <p>在左侧选择一篇笔记开始编辑，或点击「新建笔记」创建一篇新的笔记。</p>
       </div>
     </div>

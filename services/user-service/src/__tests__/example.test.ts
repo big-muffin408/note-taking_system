@@ -1,30 +1,26 @@
-import express from 'express';
-import { request } from './request-helper.js';
+import { request } from '@notes/shared/testing';
 
-// 创建一个简单的Express应用用于测试
-const app = express();
-app.use(express.json());
+jest.mock('../db.js', () => ({
+  __esModule: true,
+  default: { query: jest.fn() },
+  ensureUserSchema: jest.fn(),
+}));
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'user-service' });
-});
+import { app } from '../app.js';
 
 describe('User Service Health Check', () => {
   it('should return health status', async () => {
-    const response = await request(app)
-      .get('/health')
-      .expect(200);
+    const response = await request(app).get('/health').expect(200);
 
-    expect(response.body).toEqual({
+    expect(response.body).toMatchObject({
+      service: 'user-service',
       status: 'ok',
-      service: 'user-service'
     });
+    expect(response.body).toHaveProperty('timestamp');
   });
 
   it('should return JSON content type', async () => {
-    const response = await request(app)
-      .get('/health')
-      .expect('Content-Type', /json/);
+    const response = await request(app).get('/health').expect('Content-Type', /json/);
 
     expect(response.status).toBe(200);
   });

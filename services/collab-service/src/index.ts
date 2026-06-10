@@ -1,12 +1,13 @@
-import cors from 'cors';
-import express from 'express';
 import { createServer } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import { createRequire } from 'node:module';
 import { MongoClient, ObjectId } from 'mongodb';
 import { WebSocketServer } from 'ws';
 import type * as YTypes from 'yjs';
-import { errorHandler, notFoundHandler } from './error-handler.js';
+import { getTokenFromRequest, requireJwtSecret, verifyToken } from '@notes/shared';
+import { createApp } from './app.js';
+import { checkDocumentAccess, getDocumentId } from './connection-auth.js';
+import { createDebouncedPersister } from './persistence.js';
 
 const require = createRequire(import.meta.url);
 const Y = require('yjs') as typeof import('yjs');
@@ -24,30 +25,19 @@ const {
   ) => void;
 };
 
-const app = express();
+const app = createApp(docs);
 const port = Number(process.env.PORT ?? 3004);
 const mongoUrl = process.env.MONGO_URL ?? 'mongodb://localhost:27017';
 const dbName = process.env.MONGO_DB ?? 'notes';
 const persistDebounceMs = Number(process.env.COLLAB_PERSIST_DEBOUNCE_MS ?? 1000);
 const userServiceUrl = process.env.USER_SERVICE_URL ?? 'http://localhost:3001';
-const jwtSecret = process.env.JWT_SECRET ?? '';
-if (!jwtSecret) {
-  console.error('FATAL: JWT_SECRET environment variable is not set');
-  process.exit(1);
-}
+const jwtSecret = requireJwtSecret();
 
 let mongoClient: MongoClient | null = null;
-const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const loadedDocuments = new Set<string>();
 const documentLoadPromises = new Map<string, Promise<YTypes.Doc>>();
 const versionSnapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const documentLoadedAt = new WeakMap<YTypes.Doc, Date>();
-
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
-  : ['http://localhost', 'http://localhost:5173', 'http://localhost:80'];
-app.use(cors({ origin: allowedOrigins, credentials: true }));
-app.use(express.json());
 
 async function getDb() {
   if (!mongoClient) {
@@ -98,19 +88,13 @@ async function persistDocument(documentId: string, ydoc: YTypes.Doc) {
   );
 }
 
-function schedulePersist(documentId: string, ydoc: YTypes.Doc) {
-  const existing = persistTimers.get(documentId);
-  if (existing) clearTimeout(existing);
+const persister = createDebouncedPersister<YTypes.Doc>(persistDocument, persistDebounceMs);
 
-  const timer = setTimeout(() => {
-    persistTimers.delete(documentId);
-    persistDocument(documentId, ydoc).catch((error) => {
-      console.error(`Failed to persist collaborative document ${documentId}:`, error);
-    });
-  }, persistDebounceMs);
-
-  persistTimers.set(documentId, timer);
-}
+const accessDeps = {
+  getDb,
+  userServiceUrl,
+  internalSecret: process.env.INTERNAL_SERVICE_SECRET ?? '',
+};
 
 async function ensureDocumentLoaded(documentId: string) {
   const existing = documentLoadPromises.get(documentId);
@@ -127,7 +111,7 @@ async function ensureDocumentLoaded(documentId: string) {
       }
 
       ydoc.on('update', () => {
-        schedulePersist(documentId, ydoc);
+        persister.schedule(documentId, ydoc);
       });
 
       loadedDocuments.add(documentId);
@@ -145,16 +129,6 @@ async function ensureDocumentLoaded(documentId: string) {
   }
 
   return ydoc;
-}
-
-async function flushDocument(documentId: string, ydoc: YTypes.Doc) {
-  const timer = persistTimers.get(documentId);
-  if (timer) {
-    clearTimeout(timer);
-    persistTimers.delete(documentId);
-  }
-
-  await persistDocument(documentId, ydoc);
 }
 
 async function saveVersionSnapshot(documentId: string, ydoc: YTypes.Doc) {
@@ -238,78 +212,6 @@ function clearVersionSnapshotTimer(documentId: string) {
   }
 }
 
-function getDocumentId(request: IncomingMessage) {
-  const url = new URL(request.url ?? '/ws/collab/default', 'http://localhost');
-  const match = url.pathname.match(/^\/ws\/collab\/([^/]+)$/);
-  return match?.[1] ? decodeURIComponent(match[1]) : null;
-}
-
-function getTokenFromRequest(request: IncomingMessage): string | null {
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  const token = url.searchParams.get('token');
-  if (token) return token;
-  const authHeader = request.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) return authHeader.slice(7);
-  return null;
-}
-
-function verifyToken(token: string): { id: string; email: string } | null {
-  try {
-    const jwt = require('jsonwebtoken');
-    return jwt.verify(token, jwtSecret) as { id: string; email: string };
-  } catch {
-    return null;
-  }
-}
-
-async function checkDocumentAccess(userId: string, documentId: string): Promise<boolean> {
-  try {
-    const db = await getDb();
-    let objectId;
-    try {
-      objectId = new ObjectId(documentId);
-    } catch {
-      return false;
-    }
-    const doc = await db.collection('documents').findOne({ _id: objectId });
-    if (!doc) return false;
-    if (doc.ownerId === userId) return true;
-
-    // Check share via user-service
-    const internalHeaders: Record<string, string> = {};
-    const internalSecret = process.env.INTERNAL_SERVICE_SECRET ?? '';
-    if (internalSecret) internalHeaders['X-Internal-Secret'] = internalSecret;
-    const res = await fetch(`${userServiceUrl}/internal/check-access?userId=${encodeURIComponent(userId)}&documentId=${encodeURIComponent(documentId)}`, { headers: internalHeaders });
-    if (!res.ok) return false;
-    const data = await res.json() as { access: string };
-    return data.access === 'read' || data.access === 'write';
-  } catch {
-    return false;
-  }
-}
-
-function getConnectionCount() {
-  let count = 0;
-  docs.forEach((doc) => {
-    count += doc.conns?.size ?? 0;
-  });
-  return count;
-}
-
-app.get('/health', (_req, res) => {
-  res.json({
-    service: 'collab-service',
-    status: 'ok',
-    documents: docs.size,
-    connections: getConnectionCount(),
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// 错误处理中间件
-app.use(notFoundHandler);
-app.use(errorHandler);
-
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
@@ -322,13 +224,13 @@ wss.on('connection', async (socket, request) => {
 
   // Verify JWT and check document access
   const token = getTokenFromRequest(request);
-  const user = token ? verifyToken(token) : null;
+  const user = token ? verifyToken(token, jwtSecret) : null;
   if (!user) {
     socket.close();
     return;
   }
 
-  const hasAccess = await checkDocumentAccess(user.id, documentId);
+  const hasAccess = await checkDocumentAccess(user.id, documentId, accessDeps);
   if (!hasAccess) {
     socket.close();
     return;
@@ -355,7 +257,7 @@ wss.on('connection', async (socket, request) => {
           clearVersionSnapshotTimer(documentId);
 
           // Flush pending changes, then clean up all in-memory state
-          flushDocument(documentId, ydoc)
+          persister.flush(documentId, ydoc)
             .catch((error) => {
               console.error(`Failed to flush collaborative document ${documentId}:`, error);
             })
@@ -390,8 +292,7 @@ server.on('upgrade', (request, socket, head) => {
 process.on('SIGTERM', async () => {
   for (const timer of versionSnapshotTimers.values()) clearInterval(timer);
   versionSnapshotTimers.clear();
-  for (const timer of persistTimers.values()) clearTimeout(timer);
-  persistTimers.clear();
+  persister.cancelAll();
   await mongoClient?.close();
   process.exit(0);
 });

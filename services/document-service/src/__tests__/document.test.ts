@@ -1,312 +1,244 @@
-import express from 'express';
-import { request } from './request-helper.js';
+import { ObjectId } from 'mongodb';
+import { request } from '@notes/shared/testing';
+import { signToken } from '@notes/shared';
 
-// 创建一个简化的测试应用
-const app = express();
-app.use(express.json());
+const collections = new Map<string, any>();
 
-// 模拟健康检查接口
-app.get('/health', (_req, res) => {
-  res.json({
-    service: 'document-service',
-    status: 'ok',
-    timestamp: new Date().toISOString()
-  });
-});
+jest.mock('../db.js', () => ({
+  getDb: jest.fn(async () => ({
+    collection: (name: string) => collections.get(name),
+  })),
+}));
 
-// 模拟笔记列表接口
-app.get('/notes', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未授权' });
-  }
+import { app } from '../app.js';
 
-  res.json({
-    items: [
-      {
-        id: 'note-1',
-        title: '测试笔记 1',
-        content: '这是测试笔记内容',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: 'note-2',
-        title: '测试笔记 2',
-        content: '这是另一个测试笔记',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ],
-    total: 2
-  });
-});
+const SECRET = process.env.JWT_SECRET!;
+const auth = `Bearer ${signToken({ id: 'owner-1', email: 'owner@test.com' }, SECRET)}`;
+const NOTE_ID = '507f1f77bcf86cd799439011';
 
-// 模拟创建笔记接口
-app.post('/notes', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未授权' });
-  }
+const mockFetch = jest.fn();
+global.fetch = mockFetch as unknown as typeof fetch;
 
-  const { title, content } = req.body;
-  if (!title) {
-    return res.status(400).json({ error: '标题不能为空' });
-  }
+function chainedFind(result: any[]) {
+  const chain: any = {
+    sort: jest.fn(() => chain),
+    project: jest.fn(() => chain),
+    skip: jest.fn(() => chain),
+    limit: jest.fn(() => chain),
+    toArray: jest.fn().mockResolvedValue(result),
+  };
+  return chain;
+}
 
-  res.status(201).json({
-    id: 'new-note-id',
-    title,
-    content: content || '',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  });
-});
+function createCollection() {
+  return {
+    find: jest.fn(() => chainedFind([])),
+    findOne: jest.fn().mockResolvedValue(null),
+    findOneAndUpdate: jest.fn().mockResolvedValue(null),
+    insertOne: jest.fn(async () => ({ insertedId: new ObjectId(NOTE_ID) })),
+    updateOne: jest.fn().mockResolvedValue({}),
+    deleteOne: jest.fn().mockResolvedValue({}),
+    countDocuments: jest.fn().mockResolvedValue(0),
+  };
+}
 
-// 模拟获取单个笔记接口
-app.get('/notes/:id', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未授权' });
-  }
-
-  const { id } = req.params;
-  if (id === 'not-found') {
-    return res.status(404).json({ error: '笔记不存在' });
-  }
-
-  res.json({
-    id,
+function ownNote(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: new ObjectId(NOTE_ID),
     title: '测试笔记',
-    content: '这是测试笔记内容',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    content: '<p>内容</p>',
+    ownerId: 'owner-1',
+    createdAt: new Date('2026-05-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-05-02T00:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+let documents: ReturnType<typeof createCollection>;
+let versions: ReturnType<typeof createCollection>;
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  // 默认：user-service 不可达（无共享、无收藏），路由应退化为仅自有笔记
+  mockFetch.mockResolvedValue({ ok: false });
+  documents = createCollection();
+  versions = createCollection();
+  collections.clear();
+  collections.set('documents', documents);
+  collections.set('versions', versions);
+  collections.set('audit_logs', createCollection());
+});
+
+describe('GET /health', () => {
+  it('returns the real service identity', async () => {
+    const res = await request(app).get('/health').expect(200);
+    expect(res.body).toMatchObject({ service: 'document-service', status: 'ok' });
+    expect(res.body).toHaveProperty('timestamp');
   });
 });
 
-// 模拟更新笔记接口
-app.put('/notes/:id', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未授权' });
-  }
+describe('GET /notes', () => {
+  it('rejects unauthenticated requests', async () => {
+    await request(app).get('/notes').expect(401);
+  });
 
-  const { id } = req.params;
-  const { title, content } = req.body;
+  it('lists own notes when share lookups fail', async () => {
+    documents.find.mockReturnValueOnce(chainedFind([ownNote()]));
+    const res = await request(app).get('/notes').set('Authorization', auth).expect(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0]).toMatchObject({ id: NOTE_ID, title: '测试笔记', ownerId: 'owner-1', starred: false });
+  });
 
-  if (!title && !content) {
-    return res.status(400).json({ error: '请提供要更新的内容' });
-  }
-
-  res.json({
-    id,
-    title: title || '测试笔记',
-    content: content || '这是测试笔记内容',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+  it('marks favorited notes as starred', async () => {
+    documents.find.mockReturnValueOnce(chainedFind([ownNote()]));
+    mockFetch
+      .mockResolvedValueOnce({ ok: false }) // shares/shared-with-me
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ documentIds: [NOTE_ID] }) }); // internal/favorites
+    const res = await request(app).get('/notes').set('Authorization', auth).expect(200);
+    expect(res.body.items[0].starred).toBe(true);
   });
 });
 
-// 模拟删除笔记接口
-app.delete('/notes/:id', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未授权' });
-  }
+describe('POST /notes', () => {
+  it('rejects unauthenticated requests', async () => {
+    await request(app).post('/notes').send({ title: 'x' }).expect(401);
+  });
 
-  const { id } = req.params;
-  if (id === 'not-found') {
-    return res.status(404).json({ error: '笔记不存在' });
-  }
+  it('creates a note with the provided fields', async () => {
+    const res = await request(app)
+      .post('/notes')
+      .set('Authorization', auth)
+      .send({ title: 'New Note', content: '<p>New content</p>' })
+      .expect(201);
+    expect(res.body).toMatchObject({ id: NOTE_ID, title: 'New Note', content: '<p>New content</p>', ownerId: 'owner-1' });
+    expect(documents.insertOne).toHaveBeenCalledWith(expect.objectContaining({ title: 'New Note', ownerId: 'owner-1' }));
+  });
 
-  res.json({ deleted: true });
+  it('falls back to default title and content when omitted', async () => {
+    const res = await request(app).post('/notes').set('Authorization', auth).send({}).expect(201);
+    expect(res.body).toMatchObject({ title: '未命名笔记', content: '<p></p>' });
+  });
 });
 
-// 模拟版本列表接口
-app.get('/notes/:id/versions', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: '未授权' });
-  }
+describe('GET /notes/:id', () => {
+  it('rejects unauthenticated requests', async () => {
+    await request(app).get(`/notes/${NOTE_ID}`).expect(401);
+  });
 
-  res.json({
-    items: [
+  it('rejects malformed note ids', async () => {
+    const res = await request(app).get('/notes/not-an-id').set('Authorization', auth).expect(400);
+    expect(res.body.error).toContain('无效');
+  });
+
+  it('returns 404 when the note does not exist', async () => {
+    await request(app).get(`/notes/${NOTE_ID}`).set('Authorization', auth).expect(404);
+  });
+
+  it('returns an owned note', async () => {
+    documents.findOne.mockResolvedValueOnce(ownNote());
+    const res = await request(app).get(`/notes/${NOTE_ID}`).set('Authorization', auth).expect(200);
+    expect(res.body).toMatchObject({ id: NOTE_ID, title: '测试笔记', ownerId: 'owner-1' });
+  });
+
+  it("rejects someone else's note without a share", async () => {
+    documents.findOne.mockResolvedValueOnce(ownNote({ ownerId: 'other-1' }));
+    await request(app).get(`/notes/${NOTE_ID}`).set('Authorization', auth).expect(403);
+  });
+
+  it("allows reading someone else's note with a read share", async () => {
+    documents.findOne.mockResolvedValueOnce(ownNote({ ownerId: 'other-1' }));
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ access: 'read' }) }) // internal/check-access
+      .mockResolvedValueOnce({ ok: false }); // internal/favorites
+    const res = await request(app).get(`/notes/${NOTE_ID}`).set('Authorization', auth).expect(200);
+    expect(res.body.ownerId).toBe('other-1');
+  });
+});
+
+describe('PUT /notes/:id', () => {
+  it('rejects unauthenticated requests', async () => {
+    await request(app).put(`/notes/${NOTE_ID}`).send({ title: 'x' }).expect(401);
+  });
+
+  it('returns 404 when the note does not exist', async () => {
+    await request(app).put(`/notes/${NOTE_ID}`).set('Authorization', auth).send({ title: 'x' }).expect(404);
+  });
+
+  it('rejects edits without write access', async () => {
+    documents.findOne.mockResolvedValueOnce(ownNote({ ownerId: 'other-1' }));
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ access: 'read' }) });
+    await request(app).put(`/notes/${NOTE_ID}`).set('Authorization', auth).send({ title: 'x' }).expect(403);
+  });
+
+  it('updates an owned note', async () => {
+    documents.findOne.mockResolvedValueOnce(ownNote());
+    const res = await request(app)
+      .put(`/notes/${NOTE_ID}`)
+      .set('Authorization', auth)
+      .send({ title: '新标题' })
+      .expect(200);
+    expect(res.body).toMatchObject({ id: NOTE_ID, title: '新标题', content: '<p>内容</p>' });
+    expect(documents.updateOne).toHaveBeenCalled();
+  });
+
+  it('returns 409 with the server copy when baseUpdatedAt is stale', async () => {
+    const existing = ownNote();
+    documents.findOne
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce(ownNote({ title: '服务器版本' }));
+    documents.findOneAndUpdate.mockResolvedValueOnce(null);
+    const res = await request(app)
+      .put(`/notes/${NOTE_ID}`)
+      .set('Authorization', auth)
+      .send({ title: '本地版本', baseUpdatedAt: '2026-05-01T12:00:00.000Z' })
+      .expect(409);
+    expect(res.body.serverNote).toMatchObject({ id: NOTE_ID, title: '服务器版本' });
+  });
+});
+
+describe('DELETE /notes/:id', () => {
+  it('rejects unauthenticated requests', async () => {
+    await request(app).delete(`/notes/${NOTE_ID}`).expect(401);
+  });
+
+  it('returns 404 when the note does not exist', async () => {
+    await request(app).delete(`/notes/${NOTE_ID}`).set('Authorization', auth).expect(404);
+  });
+
+  it('rejects deleting notes owned by others', async () => {
+    documents.findOne.mockResolvedValueOnce(ownNote({ ownerId: 'other-1' }));
+    await request(app).delete(`/notes/${NOTE_ID}`).set('Authorization', auth).expect(403);
+    expect(documents.deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('deletes an owned note and reports success', async () => {
+    documents.findOne.mockResolvedValueOnce(ownNote());
+    const res = await request(app).delete(`/notes/${NOTE_ID}`).set('Authorization', auth).expect(200);
+    expect(res.body).toMatchObject({ deleted: true, id: NOTE_ID });
+    expect(documents.deleteOne).toHaveBeenCalled();
+  });
+});
+
+describe('GET /notes/:id/versions', () => {
+  it('rejects unauthenticated requests', async () => {
+    await request(app).get(`/notes/${NOTE_ID}/versions`).expect(401);
+  });
+
+  it('lists versions of an owned note', async () => {
+    documents.findOne.mockResolvedValueOnce(ownNote());
+    versions.find.mockReturnValueOnce(chainedFind([
       {
-        id: 'version-1',
-        noteId: req.params.id,
-        content: '版本 1 内容',
-        createdAt: new Date(Date.now() - 3600000).toISOString()
+        _id: new ObjectId('507f1f77bcf86cd799439021'),
+        documentId: NOTE_ID,
+        title: '测试笔记',
+        modifierId: 'owner-1',
+        label: '手动快照',
+        createdAt: new Date('2026-05-02T00:00:00.000Z'),
       },
-      {
-        id: 'version-2',
-        noteId: req.params.id,
-        content: '版本 2 内容',
-        createdAt: new Date().toISOString()
-      }
-    ],
-    total: 2
-  });
-});
-
-describe('Document Service API', () => {
-  describe('GET /health', () => {
-    it('should return health status', async () => {
-      const response = await request(app)
-        .get('/health')
-        .expect(200);
-
-      expect(response.body).toHaveProperty('service', 'document-service');
-      expect(response.body).toHaveProperty('status', 'ok');
-      expect(response.body).toHaveProperty('timestamp');
-    });
-  });
-
-  describe('GET /notes', () => {
-    it('should return 401 without authorization', async () => {
-      await request(app)
-        .get('/notes')
-        .expect(401);
-    });
-
-    it('should return notes list with authorization', async () => {
-      const response = await request(app)
-        .get('/notes')
-        .set('Authorization', 'Bearer test-token')
-        .expect(200);
-
-      expect(response.body).toHaveProperty('items');
-      expect(response.body).toHaveProperty('total');
-      expect(Array.isArray(response.body.items)).toBe(true);
-    });
-  });
-
-  describe('POST /notes', () => {
-    it('should return 401 without authorization', async () => {
-      await request(app)
-        .post('/notes')
-        .send({ title: 'Test Note' })
-        .expect(401);
-    });
-
-    it('should return 400 if title is missing', async () => {
-      const response = await request(app)
-        .post('/notes')
-        .set('Authorization', 'Bearer test-token')
-        .send({ content: 'Test content' })
-        .expect(400);
-
-      expect(response.body).toHaveProperty('error', '标题不能为空');
-    });
-
-    it('should create note with valid data', async () => {
-      const response = await request(app)
-        .post('/notes')
-        .set('Authorization', 'Bearer test-token')
-        .send({ title: 'New Note', content: 'New content' })
-        .expect(201);
-
-      expect(response.body).toHaveProperty('id');
-      expect(response.body).toHaveProperty('title', 'New Note');
-      expect(response.body).toHaveProperty('content', 'New content');
-    });
-  });
-
-  describe('GET /notes/:id', () => {
-    it('should return 401 without authorization', async () => {
-      await request(app)
-        .get('/notes/note-1')
-        .expect(401);
-    });
-
-    it('should return note by id', async () => {
-      const response = await request(app)
-        .get('/notes/note-1')
-        .set('Authorization', 'Bearer test-token')
-        .expect(200);
-
-      expect(response.body).toHaveProperty('id', 'note-1');
-      expect(response.body).toHaveProperty('title');
-      expect(response.body).toHaveProperty('content');
-    });
-
-    it('should return 404 for non-existent note', async () => {
-      await request(app)
-        .get('/notes/not-found')
-        .set('Authorization', 'Bearer test-token')
-        .expect(404);
-    });
-  });
-
-  describe('PUT /notes/:id', () => {
-    it('should return 401 without authorization', async () => {
-      await request(app)
-        .put('/notes/note-1')
-        .send({ title: 'Updated Title' })
-        .expect(401);
-    });
-
-    it('should return 400 if no update data provided', async () => {
-      const response = await request(app)
-        .put('/notes/note-1')
-        .set('Authorization', 'Bearer test-token')
-        .send({})
-        .expect(400);
-
-      expect(response.body).toHaveProperty('error');
-    });
-
-    it('should update note with valid data', async () => {
-      const response = await request(app)
-        .put('/notes/note-1')
-        .set('Authorization', 'Bearer test-token')
-        .send({ title: 'Updated Title' })
-        .expect(200);
-
-      expect(response.body).toHaveProperty('id', 'note-1');
-      expect(response.body).toHaveProperty('title', 'Updated Title');
-    });
-  });
-
-  describe('DELETE /notes/:id', () => {
-    it('should return 401 without authorization', async () => {
-      await request(app)
-        .delete('/notes/note-1')
-        .expect(401);
-    });
-
-    it('should delete note by id', async () => {
-      const response = await request(app)
-        .delete('/notes/note-1')
-        .set('Authorization', 'Bearer test-token')
-        .expect(200);
-
-      expect(response.body).toHaveProperty('deleted', true);
-    });
-
-    it('should return 404 for non-existent note', async () => {
-      await request(app)
-        .delete('/notes/not-found')
-        .set('Authorization', 'Bearer test-token')
-        .expect(404);
-    });
-  });
-
-  describe('GET /notes/:id/versions', () => {
-    it('should return 401 without authorization', async () => {
-      await request(app)
-        .get('/notes/note-1/versions')
-        .expect(401);
-    });
-
-    it('should return versions list', async () => {
-      const response = await request(app)
-        .get('/notes/note-1/versions')
-        .set('Authorization', 'Bearer test-token')
-        .expect(200);
-
-      expect(response.body).toHaveProperty('items');
-      expect(response.body).toHaveProperty('total');
-      expect(Array.isArray(response.body.items)).toBe(true);
-    });
+    ]));
+    versions.countDocuments.mockResolvedValueOnce(1);
+    const res = await request(app).get(`/notes/${NOTE_ID}/versions`).set('Authorization', auth).expect(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.items[0]).toMatchObject({ documentId: NOTE_ID, label: '手动快照' });
   });
 });

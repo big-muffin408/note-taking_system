@@ -69,10 +69,10 @@ function tokenFor(userId: string) {
 }
 
 describe('PDF parse jobs', () => {
-  let app: Awaited<typeof import('../index.js')>['app'];
+  let app: Awaited<typeof import('../app.js')>['app'];
 
   beforeAll(async () => {
-    ({ app } = await import('../index.js'));
+    ({ app } = await import('../app.js'));
   });
 
   beforeEach(() => {
